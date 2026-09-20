@@ -82,13 +82,30 @@ class TextChunkerTest {
     }
 
     @Test
-    fun `每块都不超预算 重叠不额外撑爆`() {
+    fun `每块严格不超预算`() {
         val text = sentences(60)
         val target = 120
         val plan = TextChunker.plan(text, targetTokens = target, maxChunks = 60)
         plan.chunks.forEach {
-            assertTrue("块 ${it.index}=${Tokens.estimate(it.text)} 超预算", Tokens.estimate(it.text) <= target * 1.4)
+            assertTrue("块 ${it.index}=${Tokens.estimate(it.text)} 超预算", Tokens.estimate(it.text) <= target)
         }
+    }
+
+    @Test
+    fun `重叠放不下时放弃重叠 绝不超上限`() {
+        // 短尾句(21 token) 会被选作重叠，但下一句 95 token 加上去就是 116 > 100：
+        // 老实现会照拼，块就超预算并被下游静默截断
+        val short = "短句。".repeat(7)
+        val long = "长".repeat(94) + "。"
+        val text = (short + long).repeat(6)
+        val target = 100
+        assertTrue("构造不成立：${Tokens.estimate(short)}+${Tokens.estimate(long)}", Tokens.estimate(short) + Tokens.estimate(long) > target)
+        val plan = TextChunker.plan(text, targetTokens = target, maxChunks = 60)
+        assertTrue(plan.size > 1)
+        plan.chunks.forEach {
+            assertTrue("块 ${it.index}=${Tokens.estimate(it.text)} 超上限 $target", Tokens.estimate(it.text) <= target)
+        }
+        assertEquals(text.trim(), plan.stripped())
     }
 
     @Test
@@ -116,7 +133,7 @@ class TextChunkerTest {
         assertTrue(plan.size > 5)
         assertEquals(text, plan.stripped())
         plan.chunks.forEach {
-            assertTrue("硬切后仍超预算：${Tokens.estimate(it.text)}", Tokens.estimate(it.text) <= 260)
+            assertTrue("硬切后仍超预算：${Tokens.estimate(it.text)}", Tokens.estimate(it.text) <= 200)
         }
     }
 

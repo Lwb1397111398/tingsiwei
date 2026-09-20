@@ -185,7 +185,7 @@ object Tokens {
             c in 0xAC00..0xD7AF || c in 0xF900..0xFAFF || c in 0xFF00..0xFFEF
     }
 
-    class Fit(val maxOut: Int, val system: String, val user: String, val trimmed: Boolean)
+    class Fit(val maxOut: Int, val system: String, val user: String)
 
     /**
      * 预算降级：宁可截输入也绝不因为"放不下"而打断一个本来能发的请求。
@@ -209,11 +209,8 @@ object Tokens {
             out = minOf(desiredOut.coerceAtLeast(MinOut), (cw - estSys - estUser).coerceAtLeast(MinOut))
         }
         val room = (cw - estSys - out).coerceAtLeast(MinRoom)
-        return if (estUser <= room) Fit(out, sys, user, false)
-        else {
-            val (u, did) = truncateToTokens(user, room)
-            Fit(out, sys, u, did)
-        }
+        return if (estUser <= room) Fit(out, sys, user)
+        else Fit(out, sys, truncateToTokens(user, room).first)
     }
 
     private const val MinOut = LlmPolicy.MIN_OUTPUT_TOKENS

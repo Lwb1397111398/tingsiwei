@@ -20,6 +20,7 @@ object AudioDecode {
         maxSeconds: Int = 30,
         silenceMs: Int = 220,
         silenceThresh: Int = 600,
+        isCancelled: () -> Boolean = { false },
         onProgress: (Float) -> Unit = {},
         onChunk: (FloatArray) -> Unit,
     ) {
@@ -57,7 +58,7 @@ object AudioDecode {
                 val info = MediaCodec.BufferInfo()
                 var inputDone = false
                 var outputDone = false
-                while (!outputDone) {
+                while (!outputDone && !isCancelled()) {
                     if (!inputDone) {
                         val inIdx = codec.dequeueInputBuffer(10_000)
                         if (inIdx >= 0) {
@@ -91,7 +92,7 @@ object AudioDecode {
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                     }
                 }
-                if (buffer.size > 0) onChunk(buffer.takeAllResampled())
+                if (buffer.size > 0 && !isCancelled()) onChunk(buffer.takeAllResampled())
             } finally {
                 try {
                     codec.stop()

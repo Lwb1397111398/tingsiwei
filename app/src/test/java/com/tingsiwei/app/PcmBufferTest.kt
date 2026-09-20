@@ -97,6 +97,32 @@ class PcmBufferTest {
     }
 
     @Test
+    fun `8k 源上采样到 16k 长度翻倍`() {
+        val buffer = PcmBuffer(8000, 8192)
+        buffer.append(shortBufOf(ShortArray(8000) { 100 }), 8000, 1)
+        assertEquals(16000, buffer.takeAllResampled().size)
+    }
+
+    @Test
+    fun `44100 分多次取用后长度与数值仍正确`() {
+        val buffer = PcmBuffer(44100, 8192)
+        var at = 0
+        while (at < 22050) { // 0.5 秒，分小批喂
+            val n = minOf(1500, 22050 - at)
+            buffer.append(shortBufOf(ShortArray(n) { 5000 }), n, 1)
+            at += n
+        }
+        assertEquals(22050, buffer.size)
+        val first = buffer.takeResampled(4410)
+        assertEquals(1600, first.size) // 4410 / 44100 * 16000
+        assertTrue("常量信号重采样后应保持幅值", first.all { kotlin.math.abs(it - 5000 / 32768f) < 0.0001f })
+        val rest = buffer.takeAllResampled()
+        assertEquals(8000, first.size + rest.size) // 0.5 秒音频 = 8000 个 16k 样本
+        assertEquals(6400, rest.size)
+        assertEquals(0, buffer.size)
+    }
+
+    @Test
     fun `零长度与越界取用都安全`() {
         val buffer = PcmBuffer(16000, 8192)
         assertEquals(0, buffer.takeResampled(1000).size)

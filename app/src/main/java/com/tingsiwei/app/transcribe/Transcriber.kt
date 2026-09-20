@@ -2,7 +2,9 @@ package com.tingsiwei.app.transcribe
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /** 转写门面：按设置的方式把音频转成文字 */
 object Transcriber {
@@ -25,9 +27,11 @@ object Transcriber {
         try {
             val sb = StringBuilder()
             var blocks = 0
+            val ctx = coroutineContext
             withContext(Dispatchers.Default) {
                 AudioDecode.forEachChunk(
                     audioPath,
+                    isCancelled = { !ctx.isActive },
                     onProgress = { frac ->
                         val pct = (frac * 100f).toInt().coerceIn(0, 100)
                         onProgress(frac, "正在识别…已完成 $pct%，已识别 ${sb.length} 字（第 ${blocks + 1} 段）")

@@ -21,31 +21,37 @@ import java.io.File
 class LongTextPipelineTest {
 
     private class FakeLLM(
+        /** 可重试错误（相当于 5xx / 网络抖动） */
         val failSegments: Set<Int> = emptySet(),
+        /** 不可重试错误（相当于 KEY 不对 / 坏格式），默认每段都抛 */
+        val fatalSegments: Set<Int>? = null,
+        val fatalKind: LlmError = LlmError.Reject(401),
         val failEvery: Int = 0,
         val failMerge: Boolean = false,
-        val rejectOnce: Boolean = false,
+        val outlineUnits: Int = 20,
     ) : Complete {
         var calls = 0
         val inputs = mutableListOf<Int>()
         var segmentCalls = 0
         var mergeCalls = 0
 
+        private fun filler(units: Int) = "要点内容若干举例说明。".repeat(units)
+
         override suspend fun call(system: String, user: String, temperature: Double, desiredOutTokens: Int): String {
             calls++
             inputs.add(Tokens.estimate(system) + Tokens.estimate(user))
             val seq = Regex("第 (\\d+)/(\\d+) 小段").find(user)?.groupValues?.get(1)?.toInt()
-            if (rejectOnce && seq != null) throw LlmError.Reject(401)
+            if (seq != null && fatalSegments?.contains(seq - 1) == true) throw fatalKind
             if (seq != null && seq - 1 in failSegments) throw LlmError.Server(500)
             if (failEvery > 0 && calls % failEvery == 2) throw LlmError.RateLimited(429, null)
             return when {
                 seq != null -> {
                     segmentCalls++
-                    "小节：第${seq}节\n" + "\t要点内容若干举例说明。\n".repeat(18)
+                    "小节：第${seq}节\n" + filler(outlineUnits)
                 }
                 system.contains("更高层的大纲") -> {
                     mergeCalls++
-                    if (failMerge) "" else "小节：归并组${calls}\n" + "\t归并要点内容若干。\n".repeat(18)
+                    if (failMerge) "" else "小节：归并组${calls}\n" + filler(outlineUnits)
                 }
                 else -> "<导图>\n总主题\n\t分支一\n\t\t叶子\n\t分支二\n</导图>\n<思路>\n因为所以的记忆叙述\n</思路>"
             }
@@ -132,17 +138,44 @@ class LongTextPipelineTest {
     }
 
     @Test
-    fun `KEY 不对时立刻中止不去把剩下的段全打一遍`() {
+    fun `KEY 不对时连着两段就停手`() {
         val (store, dir) = tempStore()
-        val fake = FakeLLM(rejectOnce = true)
+        val fake = FakeLLM(fatalSegments = (0..100).toSet())
         val pipeline = LongTextPipeline(fake, store, contextWindow = 16384)
         try {
             runBlocking { pipeline.run(7L, lecture(40000), "标题", true) }
             assertTrue("应抛异常", false)
         } catch (e: LlmException) {
             assertTrue("要带上接口给的提示：${e.message}", e.message!!.contains("API KEY"))
-            assertEquals("第一段失败就该中止，不能继续打剩下的段", 1, fake.calls)
+            assertEquals("两段就该停手，不能把 12 段全打一遍", 2, fake.calls)
         }
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `坏格式类不可重试错误同样会及早停手`() {
+        for (kind in listOf(LlmError.BadFormat(), LlmError.EmptyContent(), LlmError.Truncated())) {
+            val (store, dir) = tempStore()
+            val fake = FakeLLM(fatalSegments = (0..100).toSet(), fatalKind = kind)
+            try {
+                runBlocking { LongTextPipeline(fake, store, 16384).run(7L, lecture(40000), "标题", true) }
+                assertTrue("应抛异常", false)
+            } catch (e: LlmException) {
+                assertEquals("${kind.javaClass.simpleName} 应在第二段后停手", 2, fake.calls)
+            }
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `偶发一段不可重试错误只跳过那一段不中止整篇`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM(fatalSegments = setOf(3))
+        val result = runBlocking { LongTextPipeline(fake, store, 16384).run(8L, lecture(40000), "标题", true) }
+        assertEquals(listOf(3), result.failedSegments)
+        assertTrue(TreeText.parse(result.mapText).isNotEmpty())
+        assertTrue("提示要指出第 4 段：${result.notice()}", result.notice()!!.contains("第 4 段"))
+        assertTrue("后面的段照常提炼", fake.segmentCalls > 6)
         dir.deleteRecursively()
     }
 
@@ -170,6 +203,43 @@ class LongTextPipelineTest {
         plan.chunks.forEach { assertTrue("块 ${Tokens.estimate(it.text)} 超上限", Tokens.estimate(it.text) <= pipeline.maxChunkTokens) }
         fake.inputs.forEach { assertTrue("每次请求都要在窗口内：$it", it <= pipeline.effectiveWindow) }
         assertTrue(TreeText.parse(result.mapText).isNotEmpty())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `窗口小到装不下提示词时直接报错不浪费调用`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM()
+        try {
+            runBlocking { LongTextPipeline(fake, store, 1024).run(20L, lecture(6000), "标题", true) }
+            assertTrue("应抛异常", false)
+        } catch (e: LlmException) {
+            assertTrue("要说清怎么办：${e.message}", e.message!!.contains("窗口太小") && e.message!!.contains("上下文窗口"))
+            assertEquals("一次都不该调用", 0, fake.calls)
+        }
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `归并两层仍装不下时如实报告截断`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM(outlineUnits = 80) // 每段大纲约 880 token
+        val pipeline = LongTextPipeline(fake, store, contextWindow = 4096)
+        val result = runBlocking { pipeline.run(21L, lecture(30000), "标题", true) }
+        assertTrue("应标记截断", result.finalTrimmed)
+        val notice = result.notice()!!
+        assertTrue("提示里要说截断与怎么解决：$notice", notice.contains("截掉") && notice.contains("上下文窗口"))
+        assertTrue("每段大纲仍不超单块上限", fake.inputs.all { it <= pipeline.effectiveWindow })
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `段数超过上限时提示用户会多花时间`() {
+        val (store, dir) = tempStore()
+        val pipeline = LongTextPipeline(FakeLLM(), store, contextWindow = 4096, conservative = true)
+        val result = runBlocking { pipeline.run(22L, lecture(15000), "标题", true) }
+        assertTrue(result.chunkCapExceeded)
+        assertTrue("提示要说明拆成几段：${result.notice()}", result.notice()!!.contains("拆成"))
         dir.deleteRecursively()
     }
 

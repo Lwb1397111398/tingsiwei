@@ -97,7 +97,7 @@ class SpeechCutTest {
             fed = minOf(fed + 137, original.size)
             cut = inc.pickCut(original, fed)
         }
-        assertTrue("增量扫描也要能出块", cut > 0)
+        assertEquals("增量扫描与一次扫描应给出同一切点", oneShot, cut)
         assertQuiet(cut, fed)
     }
 
@@ -140,9 +140,9 @@ class SpeechCutTest {
 
     @Test
     fun `阈值生效 高于门限的能量不算静音`() {
-        val buf = join(loud(1000), level(1400, 5000), loud(400))
+        val buf = join(loud(1000), level(1600, 5000), loud(400))
         assertEquals(0, scanner(thresh = 600).pickCut(buf, buf.size))
-        assertTrue("放宽门限后同一段可切", scanner(thresh = 6000).pickCut(buf, buf.size) > 0)
+        assertTrue("放宽门限后同一段可切", scanner(thresh = 6000).pickCut(buf, buf.size) >= 1600)
     }
 
     @Test

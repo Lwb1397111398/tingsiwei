@@ -418,7 +418,7 @@ class LlmPolicyTest {
     }
 
     @Test
-    fun `zz2 生产路径上 KEY 不对也必须只打一次就中止`() {
+    fun `zz2 生产路径上 KEY 不对也必须两段内停手`() {
         // 走真实的 LlmSession（不是假 Complete），验证 Reject 能穿过客户端边界被流水线识别
         val time = FakeTime()
         var posts = 0
@@ -442,7 +442,7 @@ class LlmPolicyTest {
             fail("应中止")
         } catch (e: LlmException) {
             assertTrue("要带上接口给的提示：${e.message}", e.message!!.contains("API KEY"))
-            assertEquals("第一段被拒就该停手，不能把剩下的段全打一遍", 1, posts)
+            assertEquals("连着两段被拒就该停手，不能把 12 段全打一遍", 2, posts)
             assertTrue("不该有任何退避等待", time.waits.isEmpty())
         } finally {
             dir.deleteRecursively()

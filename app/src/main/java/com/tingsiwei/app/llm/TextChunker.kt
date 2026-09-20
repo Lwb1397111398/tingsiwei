@@ -58,7 +58,7 @@ object TextChunker {
                     groups.mapIndexed { i, g -> Chunk(i, g.first, g.second) },
                     noBoundary,
                     target,
-                    atCeiling && groups.size > maxChunks,
+                    groups.size > maxChunks,
                 )
             }
             val scaled = (target * (groups.size.toDouble() / maxChunks)).toInt() + 1
@@ -76,23 +76,29 @@ object TextChunker {
         var carryTokens = 0
         var carryChars = 0
         var curTokens = 0
-        // 装填上限先扣掉重叠，保证整块不超预算
-        var packTarget = target
         for (p in pieces) {
-            if (curTokens + p.tokens > packTarget && curPieces.size > carry.size) {
+            if (curTokens + p.tokens > target && curPieces.size > carry.size) {
                 groups.add(cur.toString() to carryChars)
-                // 只带一句"短"尾作重叠；尾巴本身就长时宁可不带，也不能撑爆预算
+                // 只带一句"短"尾作重叠；尾巴本身就长时宁可不带
                 val tail = curPieces.drop(carry.size).takeLast(OVERLAP_SENTENCES)
                 val tailTokens = tail.sumOf { it.tokens }
                 carry = if (tailTokens * OverlapShareOfTarget <= target) tail else emptyList()
                 carryTokens = carry.sumOf { it.tokens }
                 carryChars = carry.sumOf { it.text.length }
-                packTarget = (target - carryTokens).coerceAtLeast(target / 2)
                 cur.setLength(0)
                 curPieces.clear()
                 cur.appendAll(carry)
                 curPieces.addAll(carry)
                 curTokens = carryTokens
+            }
+            // 光靠重叠就已经装不下下一句：放弃重叠，保证每块严格不超 target
+            if (curTokens + p.tokens > target && carryTokens > 0) {
+                cur.setLength(0)
+                curPieces.clear()
+                carry = emptyList()
+                carryTokens = 0
+                carryChars = 0
+                curTokens = 0
             }
             cur.append(p.text)
             curPieces.add(p)

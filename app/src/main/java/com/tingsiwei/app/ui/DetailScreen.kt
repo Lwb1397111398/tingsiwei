@@ -496,15 +496,12 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         viewModelScope.launch {
             val n = db.noteDao().byId(noteId) ?: return@launch
             when {
-                // READY 但带提示 = 有段落没提炼成功：重新生成会走断点续跑，只补失败的段
-                n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() ->
-                    startPipeline { generateInternal() }
-                // AI 修改失败时旧导图仍然存在（修改只在成功后才覆盖），
-                // 直接恢复可用；绝不能重头生成把用户手动整理的导图清掉
-                n.mapJson != null ->
+                // 只是"改图失败"：原导图还在也没坏，清掉提示即可，绝不重跑整篇生成（省额度）
+                n.status == NoteStatus.ERROR && n.errorMsg.orEmpty().startsWith("修改失败") ->
                     db.noteDao().update(
                         n.copy(status = NoteStatus.READY, errorMsg = null, updatedAt = System.currentTimeMillis())
                     )
+                // generate() 覆盖前会自动存版本快照，所以重生成不会弄丢手动整理的导图（时钟图标里可回退）
                 n.content.isNullOrBlank() && n.audioPath != null -> startPipeline { transcribe() }
                 else -> startPipeline { generateInternal() }
             }

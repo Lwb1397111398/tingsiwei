@@ -21,10 +21,12 @@ class SpeechScanner(
 
     private var scannedFrames = 0
     private var runStart = -1
+    private var wasForced = false
 
     fun reset() {
         scannedFrames = 0
         runStart = -1
+        wasForced = false
     }
 
     fun pickCut(mono: ShortArray, len: Int): Int {
@@ -32,9 +34,14 @@ class SpeechScanner(
         val force = len >= max
         if (!force && len < target) return 0
         val limit = minOf(len, max)
-        // 统一用 min 作下界（而不是"没到 target 前用 target"）：
-        // 否则增量扫描会跳过当初"太早"的静音点，攒到硬上限后只能在句中硬切，比一次扫描更差
-        val searchFrom = min.coerceIn(1, limit)
+        if (force != wasForced) {
+            // 判定口径刚切换（攒到硬上限后允许更早切）：之前的帧是按更严的下界扫的，重扫一遍。
+            // 每出一次块最多发生一次，整体仍是线性，不会退化成平方。
+            scannedFrames = 0
+            runStart = -1
+            wasForced = force
+        }
+        val searchFrom = if (force) min.coerceIn(1, limit) else target
         val frames = limit / FrameSamples
         var f = scannedFrames
         while (f < frames) {

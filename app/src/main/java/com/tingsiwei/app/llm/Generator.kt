@@ -55,6 +55,18 @@ class Generator(
             }
             val forest = TreeText.parse(outcome.mapText)
             if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或在设置里换个模型")
+            // 覆盖前存一份快照：重新生成绝不能把用户手动整理过的导图弄丢
+            note.mapJson?.let { old ->
+                db.versionDao().insert(
+                    VersionEntity(
+                        noteId = note.id,
+                        createdAt = now(),
+                        mapJson = old,
+                        thinking = note.thinking,
+                        virtualRoot = note.virtualRoot,
+                    )
+                )
+            }
             val (mapJson, virtualRoot) = TreeText.toMapData(forest, note.title)
             dao.update(
                 note.copy(
@@ -120,7 +132,14 @@ class Generator(
             )
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            dao.update(note.copy(status = NoteStatus.ERROR, errorMsg = friendly(e), updatedAt = now()))
+            // 修改失败绝不能破坏现有导图：带"修改失败"前缀，界面上的「重试」只会清掉提示，不会重跑整篇生成
+            dao.update(
+                note.copy(
+                    status = NoteStatus.ERROR,
+                    errorMsg = "修改失败：${friendly(e)}（原导图未改动，可重新提一次要求）",
+                    updatedAt = now(),
+                )
+            )
         }
     }
 
