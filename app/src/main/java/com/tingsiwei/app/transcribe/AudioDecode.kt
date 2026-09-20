@@ -5,18 +5,20 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 
 /**
- * 把任意音频文件（m4a/mp3/wav…）解码为 16kHz 单声道 PCM，按块吐出，
+ * 把任意音频文件（m4a/mp3/wav…）解码为 16kHz 单声道 PCM，按"句子边界"逐块吐出，
  * 避免整段长录音一次性载入内存（一小时音频约 830MB，绝不能整体加载）。
+ *
+ * 出块点由 [SpeechCut] 在静音中点选择：块长落在 target~max 之间，
+ * 既不把一句话劈成两半，也不会因为长时间静音而攒出超大块。
  */
 object AudioDecode {
 
-    /**
-     * 解码音频文件，每累计约 [chunkSeconds] 秒源音频就回调一次 16k 单声道 float（-1..1）。
-     * @param onProgress 0..1（按已解码时长 / 总时长）
-     */
     fun forEachChunk(
         path: String,
-        chunkSeconds: Int = 15,
+        targetSeconds: Int = 15,
+        maxSeconds: Int = 30,
+        silenceMs: Int = 220,
+        silenceThresh: Int = 600,
         onProgress: (Float) -> Unit = {},
         onChunk: (FloatArray) -> Unit,
     ) {
@@ -41,38 +43,39 @@ object AudioDecode {
             val channels = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
             val durationUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION) else 0L
 
+            val target = srcRate * targetSeconds
+            val max = (srcRate * maxSeconds).coerceAtLeast(target + 1)
+            val minSilence = srcRate * silenceMs / 1000
+
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(fmt, null, null, 0)
                 codec.start()
 
-                val chunkSourceSamples = srcRate.toLong() * chunkSeconds
-                // 累积的下混后单声道样本
-                var mono = ShortArray((chunkSourceSamples * 1.2).toInt().coerceAtLeast(8192))
+                var mono = ShortArray(max.coerceAtLeast(8192) + srcRate)
                 var monoLen = 0
 
-                fun flushChunk(forceResampleTail: Boolean) {
-                    if (monoLen <= 0) return
-                    if (!forceResampleTail && monoLen < chunkSourceSamples) return
-                    // 线性插值重采样到 16k
-                    val outLen = (monoLen.toLong() * 16000 / srcRate).toInt()
-                    if (outLen <= 0) return
-                    val out = FloatArray(outLen)
-                    val step = srcRate.toDouble() / 16000.0
-                    var pos = 0.0
-                    for (i in 0 until outLen) {
-                        val i0 = pos.toInt()
-                        val frac = (pos - i0).toFloat()
-                        val s0 = mono[i0].toFloat() / 32768f
-                        val s1 = (if (i0 + 1 < monoLen) mono[i0 + 1] else mono[monoLen - 1]).toFloat() / 32768f
-                        out[i] = s0 + (s1 - s0) * frac
-                        pos += step
+                /** 把缓冲区前 [count] 个源采样重采样成 16k float 交出去，其余留在缓冲区头部 */
+                fun emit(count: Int) {
+                    if (count <= 0) return
+                    val take = minOf(count, monoLen)
+                    val outLen = (take.toLong() * 16000 / srcRate).toInt()
+                    if (outLen > 0) {
+                        val out = FloatArray(outLen)
+                        val step = srcRate.toDouble() / 16000.0
+                        var pos = 0.0
+                        for (i in 0 until outLen) {
+                            val i0 = pos.toInt().coerceAtMost(take - 1)
+                            val i1 = minOf(i0 + 1, take - 1)
+                            val s0 = mono[i0].toFloat() / 32768f
+                            val s1 = mono[i1].toFloat() / 32768f
+                            out[i] = s0 + (s1 - s0) * (pos - i0).toFloat()
+                            pos += step
+                        }
+                        onChunk(out)
                     }
-                    onChunk(out)
-                    // 保留未消费的尾部样本
-                    val consumed = outLen.toLong() * srcRate / 16000
-                    val remain = monoLen - consumed.toInt()
-                    if (remain > 0) System.arraycopy(mono, consumed.toInt(), mono, 0, remain)
+                    val remain = monoLen - take
+                    if (remain > 0) System.arraycopy(mono, take, mono, 0, remain)
                     monoLen = remain.coerceAtLeast(0)
                 }
 
@@ -95,48 +98,39 @@ object AudioDecode {
                         }
                     }
                     val outIdx = codec.dequeueOutputBuffer(info, 10_000)
-                    when {
-                        outIdx >= 0 -> {
-                            val outBuf = codec.getOutputBuffer(outIdx)!!
-                            outBuf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                            val shortBuf = outBuf.asShortBuffer()
-                            val frameCount = shortBuf.remaining() / channels
-                            // 下混为单声道
-                            if (monoLen + frameCount > mono.size) {
-                                mono = mono.copyOf((monoLen + frameCount).toInt())
-                            }
+                    if (outIdx >= 0) {
+                        val outBuf = codec.getOutputBuffer(outIdx)!!
+                        outBuf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val shortBuf = outBuf.asShortBuffer()
+                        val frameCount = shortBuf.remaining() / channels
+                        if (monoLen + frameCount > mono.size) {
+                            mono = mono.copyOf((monoLen + frameCount) * 2)
+                        }
+                        if (channels == 1) {
+                            shortBuf.get(mono, monoLen, frameCount)
+                        } else {
                             val tmp = ShortArray(frameCount)
-                            if (channels == 1) {
-                                shortBuf.get(tmp)
-                            } else {
-                                var sIdx = 0
-                                for (fr in 0 until frameCount) {
-                                    var acc = 0
-                                    for (ch in 0 until channels) {
-                                        acc += shortBuf.get(sIdx + ch).toInt()
-                                    }
-                                    tmp[fr] = (acc / channels).toShort()
-                                    sIdx += channels
-                                }
-                                shortBuf.position(shortBuf.position() + frameCount * channels)
+                            var sIdx = 0
+                            for (fr in 0 until frameCount) {
+                                var acc = 0
+                                for (ch in 0 until channels) acc += shortBuf.get(sIdx + ch).toInt()
+                                tmp[fr] = (acc / channels).toShort()
+                                sIdx += channels
                             }
+                            shortBuf.position(shortBuf.position() + frameCount * channels)
                             System.arraycopy(tmp, 0, mono, monoLen, frameCount)
-                            monoLen += frameCount
-                            codec.releaseOutputBuffer(outIdx, false)
-                            if (durationUs > 0 && info.presentationTimeUs > 0) {
-                                onProgress((info.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
-                            }
-                            flushChunk(forceResampleTail = false)
-                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                outputDone = true
-                            }
                         }
-                        outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> if (inputDone) {
-                            // 等待 EOS 输出
+                        monoLen += frameCount
+                        codec.releaseOutputBuffer(outIdx, false)
+                        if (durationUs > 0 && info.presentationTimeUs > 0) {
+                            onProgress((info.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
                         }
+                        val cut = SpeechCut.pickCut(mono, monoLen, target, max, minSilence, silenceThresh)
+                        if (cut > 0) emit(cut)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                     }
                 }
-                flushChunk(forceResampleTail = true)
+                if (monoLen > 0) emit(monoLen)
             } finally {
                 try {
                     codec.stop()

@@ -67,6 +67,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     val transcribeMode by vm.transcribeMode.collectAsState()
     val allowExpand by vm.allowExpand.collectAsState()
     val ttsRate by vm.ttsRate.collectAsState()
+    val contextWindow by vm.contextWindow.collectAsState()
+    val minIntervalMs by vm.minIntervalMs.collectAsState()
+    val conservative by vm.conservative.collectAsState()
     val modelState by vm.modelState.collectAsState()
     val message by vm.message.collectAsState()
     val busy by vm.busy.collectAsState()
@@ -217,6 +220,46 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // ---- 长录音与限流 ----
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("长录音与限流", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "接口返回 429（限流）时会自动等待重试，已提炼的段落会保留，可从断点继续。" +
+                            "长录音总是失败就把节奏放慢、窗口调小。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("请求间隔", style = MaterialTheme.typography.bodyMedium)
+                        listOf(600L to "快", 1200L to "中", 2500L to "慢").forEach { (ms, label) ->
+                            if (minIntervalMs == ms) Button(onClick = {}) { Text(label) }
+                            else TextButton(onClick = { vm.setMinInterval(ms) }) { Text(label) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("上下文窗口", style = MaterialTheme.typography.bodyMedium)
+                        listOf(4096, 8192, 16384, 32768).forEach { n ->
+                            val label = "${n / 1024}k"
+                            if (contextWindow == n) Button(onClick = {}) { Text(label) }
+                            else TextButton(onClick = { vm.setContextWindow(n) }) { Text(label) }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = conservative, onCheckedChange = { vm.setConservative(it) })
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("保守模式", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "分段更少、间隔翻倍、窗口减半，给限流严重的渠道",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
             // ---- 朗读 ----
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -260,6 +303,9 @@ class SettingsViewModel : ViewModel() {
     val transcribeMode = MutableStateFlow(TranscribeMode.OFFLINE)
     val allowExpand = MutableStateFlow(true)
     val ttsRate = MutableStateFlow(1.0f)
+    val contextWindow = MutableStateFlow(16384)
+    val minIntervalMs = MutableStateFlow(1200L)
+    val conservative = MutableStateFlow(false)
     val modelState = MutableStateFlow(ModelStateUi())
     val message = MutableStateFlow<String?>(null)
     val busy = MutableStateFlow(false)
@@ -273,6 +319,9 @@ class SettingsViewModel : ViewModel() {
             transcribeMode.value = s.transcribeMode
             allowExpand.value = s.allowExpand
             ttsRate.value = s.ttsRate
+            contextWindow.value = s.llmContextWindow
+            minIntervalMs.value = s.llmMinIntervalMs
+            conservative.value = s.llmConservative
         }
     }
 
@@ -346,6 +395,27 @@ class SettingsViewModel : ViewModel() {
     fun setTtsRate(rate: Float) {
         ttsRate.value = rate
         viewModelScope.launch { repo.setTtsRate(rate) }
+    }
+
+    fun setMinInterval(ms: Long) {
+        minIntervalMs.value = ms
+        persistLimits()
+    }
+
+    fun setContextWindow(n: Int) {
+        contextWindow.value = n
+        persistLimits()
+    }
+
+    fun setConservative(flag: Boolean) {
+        conservative.value = flag
+        persistLimits()
+    }
+
+    private fun persistLimits() {
+        viewModelScope.launch {
+            repo.setLlmLimits(contextWindow.value, minIntervalMs.value, conservative.value)
+        }
     }
 
     fun downloadModel() {

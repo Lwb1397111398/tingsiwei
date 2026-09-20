@@ -9,7 +9,7 @@ object Transcriber {
 
     /**
      * 离线识别（sherpa-onnx + SenseVoice）
-     * @param onProgress (0..1, 状态描述)
+     * @param onProgress (0..1 真实进度, 状态描述)
      */
     suspend fun transcribeOffline(
         context: Context,
@@ -24,15 +24,21 @@ object Transcriber {
         val transcriber = withContext(Dispatchers.Default) { SherpaTranscriber(dir) }
         try {
             val sb = StringBuilder()
+            var blocks = 0
             withContext(Dispatchers.Default) {
-                AudioDecode.forEachChunk(audioPath) { chunk ->
+                AudioDecode.forEachChunk(
+                    audioPath,
+                    onProgress = { frac ->
+                        val pct = (frac * 100f).toInt().coerceIn(0, 100)
+                        onProgress(frac, "正在识别…已完成 $pct%，已识别 ${sb.length} 字（第 ${blocks + 1} 段）")
+                    },
+                ) { chunk ->
                     val text = transcriber.recognizeChunk(chunk)
                     if (text.isNotBlank()) {
                         if (sb.isNotEmpty() && !sb.endsWith("\n")) sb.append('\n')
                         sb.append(text)
                     }
-                    val chars = sb.length
-                    onProgress(0f, "已识别 $chars 字…")
+                    blocks++
                 }
             }
             return sb.toString().trim()

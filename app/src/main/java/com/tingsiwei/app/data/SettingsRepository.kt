@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -25,6 +27,12 @@ data class AppSettings(
     val transcribeMode: String,
     val allowExpand: Boolean,
     val ttsRate: Float,
+    /** 模型上下文窗口（token），用于预算每次请求的输入+输出 */
+    val llmContextWindow: Int = 16384,
+    /** 两次接口请求之间的最小间隔，避免自己把渠道 QPS 打满 */
+    val llmMinIntervalMs: Long = 1200L,
+    /** 保守模式：更少分段、更大间隔、更小窗口，给限流严重的渠道 */
+    val llmConservative: Boolean = false,
 )
 
 class SettingsRepository(private val context: Context) {
@@ -36,6 +44,9 @@ class SettingsRepository(private val context: Context) {
         val transcribeMode = stringPreferencesKey("transcribe_mode")
         val allowExpand = booleanPreferencesKey("allow_expand")
         val ttsRate = floatPreferencesKey("tts_rate")
+        val llmContextWindow = intPreferencesKey("llm_context_window")
+        val llmMinIntervalMs = longPreferencesKey("llm_min_interval_ms")
+        val llmConservative = booleanPreferencesKey("llm_conservative")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -46,6 +57,9 @@ class SettingsRepository(private val context: Context) {
             transcribeMode = p[K.transcribeMode] ?: TranscribeMode.OFFLINE,
             allowExpand = p[K.allowExpand] ?: true,
             ttsRate = p[K.ttsRate] ?: 1.0f,
+            llmContextWindow = p[K.llmContextWindow] ?: 16384,
+            llmMinIntervalMs = p[K.llmMinIntervalMs] ?: 1200L,
+            llmConservative = p[K.llmConservative] ?: false,
         )
     }
 
@@ -56,6 +70,14 @@ class SettingsRepository(private val context: Context) {
             p[K.llmUrl] = url.trim()
             p[K.llmKey] = key.trim()
             p[K.llmModel] = model.trim()
+        }
+    }
+
+    suspend fun setLlmLimits(contextWindow: Int, minIntervalMs: Long, conservative: Boolean) {
+        context.dataStore.edit { p ->
+            p[K.llmContextWindow] = contextWindow
+            p[K.llmMinIntervalMs] = minIntervalMs
+            p[K.llmConservative] = conservative
         }
     }
 

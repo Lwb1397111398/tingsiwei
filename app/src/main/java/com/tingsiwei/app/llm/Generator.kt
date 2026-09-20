@@ -1,19 +1,21 @@
 package com.tingsiwei.app.llm
 
+import com.tingsiwei.app.App
 import com.tingsiwei.app.data.SettingsRepository
 import com.tingsiwei.app.data.db.AppDatabase
-import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.data.db.VersionEntity
 import com.tingsiwei.app.mindmap.LlmOutputParser
 import com.tingsiwei.app.mindmap.TreeText
+import java.io.File
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 /**
  * 生成流水线：
- * 原文 →（长文分块提炼再合并）→ <导图>+<思路> → 解析 → 存库
+ * 原文 →（短：一次生成 / 长：语义分段 → 逐段提炼 → 分层归并 → 一次生成）→ <导图>+<思路> → 存库
  * 修改：当前导图+思路+用户建议 → 新导图+思路（改前自动存版本快照）
+ * 限流、退避、预算与截断降级都在 [LlmSession] 里；分段成果由 [SegmentStore] 落盘，失败可续跑。
  */
 class Generator(
     private val db: AppDatabase,
@@ -22,9 +24,7 @@ class Generator(
 
     private val client = LlmClient(settings)
 
-    /** 直接生成的长度上限，超过则走分块 map-reduce */
-    private val maxDirectChars = 5000
-    private val chunkSize = 3500
+    private class Outcome(val mapText: String, val thinking: String, val notice: String?)
 
     suspend fun generate(noteId: Long, onStage: suspend (String) -> Unit = {}) {
         val dao = db.noteDao()
@@ -37,17 +37,32 @@ class Generator(
         dao.update(note.copy(status = NoteStatus.GENERATING, errorMsg = null, updatedAt = now()))
         try {
             val cfg = settings.current()
-            val (mapText, thinking) = produceMapAndThinking(cfg, content, note.title, onStage)
-            val forest = TreeText.parse(mapText)
-            if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试")
+            val system = Prompts.generateSystem(cfg.allowExpand)
+            val pipeline = LongTextPipeline(
+                complete = { s, u, temperature, out ->
+                    client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, s, u, temperature, out)
+                },
+                store = SegmentStore(File(App.get().filesDir, "pipeline")),
+                contextWindow = cfg.llmContextWindow,
+                conservative = cfg.llmConservative,
+            )
+            val outcome = if (pipeline.useDirectRoute(content, system, FinalOutTokens)) {
+                onStage("正在生成导图…")
+                directGenerate(cfg, content)
+            } else {
+                val result = pipeline.run(noteId, content, note.title, cfg.allowExpand, onStage)
+                Outcome(result.mapText, result.thinking, result.notice())
+            }
+            val forest = TreeText.parse(outcome.mapText)
+            if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或在设置里换个模型")
             val (mapJson, virtualRoot) = TreeText.toMapData(forest, note.title)
             dao.update(
                 note.copy(
                     mapJson = mapJson,
-                    thinking = thinking.ifBlank { null },
+                    thinking = outcome.thinking.ifBlank { null },
                     virtualRoot = virtualRoot,
                     status = NoteStatus.READY,
-                    errorMsg = null,
+                    errorMsg = outcome.notice,
                     updatedAt = now(),
                 )
             )
@@ -79,17 +94,16 @@ class Generator(
         try {
             onStage("正在按你的要求修改…")
             val cfg = settings.current()
-            val currentMapText = TreeText.fromMapData(oldMap, note.virtualRoot)
-            val user = Prompts.reviseUser(currentMapText, note.thinking.orEmpty(), note.content.orEmpty(), suggestion)
-            var parsed = LlmOutputParser.parse(callWithRetry(cfg, Prompts.generateSystem(cfg.allowExpand), user))
+            val system = Prompts.generateSystem(cfg.allowExpand)
+            val user = Prompts.reviseUser(
+                TreeText.fromMapData(oldMap, note.virtualRoot),
+                note.thinking.orEmpty(),
+                note.content.orEmpty(),
+                suggestion,
+            )
+            var parsed = LlmOutputParser.parse(ask(cfg, system, user))
             if (TreeText.parse(parsed.mapText).isEmpty()) {
-                parsed = LlmOutputParser.parse(
-                    callWithRetry(
-                        cfg,
-                        Prompts.generateSystem(cfg.allowExpand),
-                        user + "\n\n（注意：上一次输出格式不对。请严格输出 <导图>…</导图> 与 <思路>…</思路> 两部分。）",
-                    )
-                )
+                parsed = LlmOutputParser.parse(ask(cfg, system, user + FormatReminder))
             }
             val forest = TreeText.parse(parsed.mapText)
             if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或换个说法")
@@ -141,92 +155,25 @@ class Generator(
 
     // ---------- 内部 ----------
 
-    private suspend fun produceMapAndThinking(
-        cfg: com.tingsiwei.app.data.AppSettings,
-        content: String,
-        title: String,
-        onStage: suspend (String) -> Unit,
-    ): Pair<String, String> {
-        return if (content.length <= maxDirectChars) {
-            onStage("正在生成导图…")
-            val out = callWithRetry(cfg, Prompts.generateSystem(cfg.allowExpand), Prompts.generateUser(content))
-            parseStrict(out)
-        } else {
-            val chunks = splitChunks(content, chunkSize)
-            val outlines = StringBuilder()
-            chunks.forEachIndexed { i, chunk ->
-                onStage("正在整理第 ${i + 1}/${chunks.size} 段…")
-                val outline = callWithRetry(cfg, Prompts.chunkSystem(), Prompts.chunkUser(chunk), temperature = 0.2)
-                outlines.append("——第 ${i + 1} 段——\n").append(outline.trim()).append("\n\n")
-            }
-            onStage("正在汇总生成导图…")
-            val merged = callWithRetry(cfg, Prompts.mergeSystem(cfg.allowExpand), Prompts.mergeUser(outlines.toString(), title))
-            parseStrict(merged)
+    private suspend fun directGenerate(cfg: com.tingsiwei.app.data.AppSettings, content: String): Outcome {
+        val system = Prompts.generateSystem(cfg.allowExpand)
+        val user = Prompts.generateUser(content)
+        var parsed = LlmOutputParser.parse(ask(cfg, system, user))
+        if (TreeText.parse(parsed.mapText).isEmpty()) {
+            parsed = LlmOutputParser.parse(ask(cfg, system, user + FormatReminder))
         }
-    }
-
-    private fun parseStrict(out: String): Pair<String, String> {
-        val parsed = LlmOutputParser.parse(out)
         if (TreeText.parse(parsed.mapText).isEmpty()) {
             throw LlmException("AI 没有按格式返回导图。可在设置里换一个模型再试。")
         }
-        return parsed.mapText to parsed.thinking
+        return Outcome(parsed.mapText, parsed.thinking, null)
     }
 
-    /** 长文按段落边界切块，单段过长时硬切 */
-    private fun splitChunks(text: String, size: Int): List<String> {
-        val chunks = mutableListOf<String>()
-        val paragraphs = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
-        if (paragraphs.isEmpty()) {
-            // 没有换行，硬切
-            var i = 0
-            while (i < text.length) {
-                chunks.add(text.substring(i, minOf(i + size, text.length)))
-                i += size
-            }
-            return chunks
-        }
-        val sb = StringBuilder()
-        for (p in paragraphs) {
-            var para = p
-            while (sb.length + para.length > size && sb.isNotEmpty()) {
-                chunks.add(sb.toString())
-                sb.clear()
-            }
-            while (para.length > size) {
-                if (sb.isNotEmpty()) {
-                    chunks.add(sb.toString())
-                    sb.clear()
-                }
-                chunks.add(para.take(size))
-                para = para.drop(size)
-            }
-            if (sb.isNotEmpty()) sb.append('\n')
-            sb.append(para)
-            if (sb.length > size) {
-                chunks.add(sb.toString())
-                sb.clear()
-            }
-        }
-        if (sb.isNotEmpty()) chunks.add(sb.toString())
-        return chunks
-    }
-
-    private suspend fun callWithRetry(
+    private suspend fun ask(
         cfg: com.tingsiwei.app.data.AppSettings,
         system: String,
         user: String,
         temperature: Double = 0.4,
-    ): String {
-        return try {
-            client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature = temperature)
-        } catch (e: LlmException) {
-            // 一次性格式问题不重试；服务端偶发错误给一次机会
-            if (e.message?.contains("HTTP 5") == true) {
-                client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature = temperature)
-            } else throw e
-        }
-    }
+    ): String = client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature, null)
 
     private fun friendly(e: Exception): String = when (e) {
         is LlmException -> e.message ?: "接口错误"
@@ -236,4 +183,10 @@ class Generator(
     }
 
     private fun now(): Long = System.currentTimeMillis()
+
+    private companion object {
+        const val FinalOutTokens = 2048
+        const val FormatReminder =
+            "\n\n（注意：上一次输出格式不对。请严格输出 <导图>…</导图> 与 <思路>…</思路> 两部分，导图用 TAB 缩进。）"
+    }
 }

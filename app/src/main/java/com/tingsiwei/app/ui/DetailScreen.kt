@@ -157,6 +157,25 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                         }
                     }
                 }
+                n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() -> {
+                    // errorMsg 在 READY 态下是"提示"（如个别段未纳入），不是错误
+                    Surface(tonalElevation = 2.dp) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                n.errorMsg,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            TextButton(onClick = { vm.retry() }) {
+                                Icon(Icons.Filled.Refresh, null)
+                                Text("补全")
+                            }
+                        }
+                    }
+                }
             }
 
             TabRow(selectedTabIndex = tab) {

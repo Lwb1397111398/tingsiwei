@@ -3,34 +3,23 @@ package com.tingsiwei.app.llm
 import com.tingsiwei.app.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 class LlmException(message: String) : RuntimeException(message)
 
-/** OpenAI 兼容接口客户端：/v1/models 拉模型列表，/v1/chat/completions 对话 */
-class LlmClient(private val settings: SettingsRepository) {
-
-    private val json = Json { ignoreUnknownKeys = true }
-
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(300, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
+/** OpenAI 兼容接口客户端：读设置 → 组装 [LlmSession] → 把分级错误转成用户看得懂的文案。 */
+class LlmClient(
+    private val settings: SettingsRepository,
+    private val transport: Transport = OkHttpTransport,
+    private val gate: RateGate = GlobalGate.shared,
+    private val sleeper: Sleeper = CoroutineSleeper,
+) {
 
     /** 把用户填的地址规范化为以 /v1 结尾的基础地址；忘写协议时默认 https */
     fun normalizeBase(url: String): String {
@@ -43,35 +32,15 @@ class LlmClient(private val settings: SettingsRepository) {
         return u
     }
 
-    /** 拉取模型列表（宽松解析：data[].id 或 models[].id） */
     suspend fun listModels(baseUrl: String, apiKey: String): List<String> = withContext(Dispatchers.IO) {
-        val base = normalizeBase(baseUrl)
-        val req = requestBuilder("$base/models", apiKey).build()
-        http.newCall(req).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw LlmException("获取模型列表失败 (HTTP ${resp.code})：${body.take(300)}")
-            parseModelIds(body)
+        try {
+            session().listModels(normalizeBase(baseUrl), apiKey)
+        } catch (e: LlmCallError) {
+            throw LlmException(e.userText())
         }
     }
 
-    private fun parseModelIds(body: String): List<String> {
-        return try {
-            val obj = json.parseToJsonElement(body).jsonObject
-            val arr: JsonArray = when {
-                obj["data"] is JsonArray -> obj["data"]!!.jsonArray
-                obj["models"] is JsonArray -> obj["models"]!!.jsonArray
-                else -> return emptyList()
-            }
-            arr.mapNotNull { el ->
-                val o = el as? JsonObject ?: return@mapNotNull null
-                (o["id"] ?: o["name"])?.jsonPrimitive?.takeIf { it.isString }?.content
-            }.filter { it.isNotBlank() }.distinct()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    /** 单轮对话（非流式）。system 可为空。 */
+    /** 单轮对话（非流式）。system 可为空。429/5xx/网络抖动自动退避重试，输出截断则精简重问一次。 */
     suspend fun chat(
         baseUrl: String,
         apiKey: String,
@@ -81,59 +50,77 @@ class LlmClient(private val settings: SettingsRepository) {
         temperature: Double = 0.4,
         maxTokens: Int? = null,
     ): String = withContext(Dispatchers.IO) {
-        require(model.isNotBlank()) { "请先在设置里选择模型" }
-        val base = normalizeBase(baseUrl)
-        val messages = buildJsonArray {
-            if (system.isNotBlank()) {
-                add(buildJsonObject {
-                    put("role", "system")
-                    put("content", system)
-                })
-            }
-            add(buildJsonObject {
-                put("role", "user")
-                put("content", user)
-            })
-        }
-        val payload = buildJsonObject {
-            put("model", model.trim())
-            put("temperature", temperature)
-            if (maxTokens != null) put("max_tokens", maxTokens)
-            put("stream", false)
-            put("messages", messages)
-        }
-        val req = requestBuilder("$base/chat/completions", apiKey)
-            .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-        http.newCall(req).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw LlmException("接口返回错误 (HTTP ${resp.code})：${body.take(400)}")
-            val obj = try {
-                json.parseToJsonElement(body).jsonObject
-            } catch (e: Exception) {
-                throw LlmException("接口返回的不是有效 JSON：${body.take(200)}")
-            }
-            val choices = obj["choices"] as? JsonArray
-            val content = choices?.firstOrNull()
-                ?.let { (it as? JsonObject)?.get("message")?.jsonObject?.get("content") }
-                ?.let { c ->
-                    // 标准格式是字符串；个别兼容接口把 content 返回成分段数组
-                    when (c) {
-                        is JsonPrimitive -> c.content
-                        is JsonArray -> c.mapNotNull { part ->
-                            (part as? JsonObject)?.get("text")
-                                ?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content
-                        }.joinToString("")
-                        else -> null
-                    }
-                }
-            content?.takeIf { it.isNotBlank() } ?: throw LlmException("接口没有返回内容：${body.take(300)}")
+        try {
+            session().chatWithDegrade(
+                baseUrl = normalizeBase(baseUrl),
+                apiKey = apiKey,
+                model = model,
+                system = system,
+                user = user,
+                temperature = temperature,
+                desiredOutTokens = maxTokens ?: 2048,
+                degradeRule = Prompts.trimRule(),
+            )
+        } catch (e: LlmCallError) {
+            throw LlmException(e.userText())
         }
     }
 
-    private fun requestBuilder(url: String, apiKey: String): Request.Builder {
-        val b = Request.Builder().url(url)
-        if (apiKey.isNotBlank()) b.header("Authorization", "Bearer ${apiKey.trim()}")
-        return b
+    private suspend fun session(): LlmSession {
+        val cfg = settings.current()
+        return LlmSession(
+            transport = transport,
+            gate = gate,
+            sleeper = sleeper,
+            policy = LlmSession.Policy(
+                contextWindow = cfg.llmContextWindow,
+                minIntervalMs = cfg.llmMinIntervalMs,
+                conservative = cfg.llmConservative,
+            ),
+        )
+    }
+}
+
+/** 分级错误 → 自然语言 + 下一步动作；不把 HTTP body 甩给用户。 */
+fun LlmCallError.userText(): String = when (this) {
+    is LlmCallError.RateLimited ->
+        if (retryAfterMs != null) "接口限流中，正在自动等待 ${retryAfterMs / 1000} 秒后继续，无需手动重试"
+        else "接口限流中，正在自动退避重试（约 1 分钟内），无需手动重试"
+    is LlmCallError.Server -> "服务端暂时不可用，已自动重试仍未成功，请稍后再试或在设置里换个模型"
+    is LlmCallError.Client -> when (httpCode) {
+        401, 403 -> "接口拒绝了请求，请检查 API KEY 是否正确、账户是否有余额"
+        404 -> "接口地址不对（找不到对话接口），请检查设置里的接口地址"
+        else -> "接口返回错误 (HTTP $httpCode)，请检查接口地址与模型名"
+    }
+    is LlmCallError.Network -> "无法连接接口，请检查手机网络和设置里的接口地址"
+    is LlmCallError.Timeout -> "请求超时，请在设置里换更快的模型，或缩短「上下文长度」"
+    is LlmCallError.BadFormat -> "接口返回的不是有效 JSON，这个渠道可能不兼容，换个模型试试"
+    is LlmCallError.EmptyContent -> "接口没有返回内容，请在设置里换一个模型再试"
+    is LlmCallError.Truncated -> "内容太长被接口截断，请在设置里开启「保守模式」后重试"
+}
+
+/** 生产传输实现：把 IO 异常收敛成分级错误，供 [LlmSession] 判断是否重试。 */
+object OkHttpTransport : Transport {
+
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+        val builder = Request.Builder().url(url)
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        val req = builder.post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+        return try {
+            http.newCall(req).execute().use { resp ->
+                val map = resp.headers.toMultimap().mapValues { it.value.firstOrNull().orEmpty() }
+                Transport.RawResp(resp.code, resp.body?.string().orEmpty(), map)
+            }
+        } catch (e: SocketTimeoutException) {
+            throw LlmCallError.Timeout(e.message.orEmpty())
+        } catch (e: IOException) {
+            throw LlmCallError.Network(e.message.orEmpty())
+        }
     }
 }

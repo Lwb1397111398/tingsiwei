@@ -7,15 +7,15 @@
 | 模块 | 位置 | 职责 |
 | --- | --- | --- |
 | 入口/导航 | `app/src/main/java/com/tingsiwei/app/MainActivity.kt`、`ui/AppNav.kt` | 单 Activity + Compose Navigation，5 个路由：home / record / textinput / detail/{noteId} / settings |
-| 数据层 | `data/db/`（Room：notes、versions 表）、`data/SettingsRepository.kt`（DataStore） | 笔记、版本快照、应用设置（LLM 地址/KEY/模型、转写方式、AI 拓展开关、语速） |
-| LLM 客户端 | `llm/LlmClient.kt` | OpenAI 兼容：地址规范化（自动补 `/v1`）、`/models` 拉模型列表、`/chat/completions` 对话；OkHttp + kotlinx-serialization |
-| 提示词 | `llm/Prompts.kt` | 生成/修改/分块提炼/合并 四类 system+user 提示词 |
-| 生成流水线 | `llm/Generator.kt` | `generate()`（>5000 字自动分块 map-reduce）、`revise()`（改前存版本快照）、`restoreVersion()`；状态机：DRAFT→TRANSCRIBING→GENERATING→READY/ERROR |
+| 数据层 | `data/db/`（Room：notes、versions 表，**version=1 未改动**）、`data/SettingsRepository.kt`（DataStore） | 笔记、版本快照、应用设置（LLM 地址/KEY/模型、转写方式、AI 拓展开关、语速、**上下文窗口/请求间隔/保守模式**） |
+| LLM 客户端 | `llm/LlmClient.kt`、`llm/LlmSession.kt`、`llm/LlmPolicy.kt` | OpenAI 兼容：地址规范化（自动补 `/v1`）、`/models` 拉模型、`/chat/completions` 对话。**弹性层**：`Transport` 接缝（可注入假实现做 JVM 单测）、`LlmCallError` 分级（429/5xx/网络/超时/坏格式/空/截断）、`RateGate` 进程级节流闸（取号即放锁，退避不占位）、指数退避+抖动（认 `Retry-After`）、`Tokens` 预算（CJK 一字一 token，压输出→截输入→缩 system 四级降级，绝不因"放不下"打断请求） |
+| 提示词 | `llm/Prompts.kt` | 生成/修改/分段提炼/分层归并/最终汇总 + 截断降级规则 |
+| 生成流水线 | `llm/Generator.kt`、`llm/LongTextPipeline.kt`、`llm/TextChunker.kt`、`llm/SegmentStore.kt` | 短内容一次生成；长内容 = **语义分段**（句末边界+1 句重叠+可还原+块数上限）→ 逐段提炼 → 最多两层归并 → 一次最终生成。段成果按 `sha1(内容)+参数` 指纹落盘（纯文件，不动 Room），失败段跳过、重跑只补失败段，内容一改旧断点整体作废。`revise()` 改前存版本快照；状态机：DRAFT→TRANSCRIBING→GENERATING→READY/ERROR（READY 时 `errorMsg` 用作"提示"而非错误） |
 | 导图格式引擎 | `mindmap/TreeText.kt` | TAB 缩进树 ↔ mind-elixir JSON 互转；多顶层主题自动包虚拟根；单测 `TreeTextTest` |
 | LLM 输出解析 | `mindmap/LlmOutputParser.kt` | 容错解析 `<导图>…</导图>` + `<思路>…</思路>`（容忍空格/代码块/缺失标签）；单测 |
 | 导图画布 | `app/src/main/assets/mindmap/` + `ui/components/MindMapPanel.kt` | WebView 跑 mind-elixir v5（esbuild 自打包，含 nodeDraggable/operationHistory/contextMenu 插件）；桥：`onMapChanged`(500ms 防抖) 回传数据、`appInit/appSetData/appSetDark/appExportPng` 等 |
 | 录音 | `record/Recorder.kt` | MediaRecorder → m4a(AAC 16k 单声道 32kbps)，暂停/继续，时长统计 |
-| 音频解码 | `transcribe/AudioDecode.kt` | MediaCodec 解码任意音频 → 16k 单声道 PCM，按 15 秒分块吐出（避免长录音整体载入内存） |
+| 音频解码 | `transcribe/AudioDecode.kt`、`transcribe/SpeechCut.kt` | MediaCodec 解码任意音频 → 16k 单声道 PCM。出块点由 `SpeechCut.pickCut`（纯函数）在**静音中点**选择：目标 15s、硬上限 30s、静音判据 220ms；只看已累积的缓冲区，内存与音频时长无关 |
 | 离线识别 | `transcribe/SherpaTranscriber.kt`、`transcribe/Transcriber.kt` | sherpa-onnx AAR(`app/libs/`) + SenseVoice int8 中文模型；流式逐块识别拼接 |
 | 模型下载 | `transcribe/ModelManager.kt` | hf-mirror 下载 model.int8.onnx(~226MB)+tokens.txt，断点续传（.part 文件），5 次重试 |
 | 系统识别 | `transcribe/SystemSpeechRecognizer.kt` | 边录边转，会话中断自动重启续接 |
@@ -27,7 +27,7 @@
 
 1. **导图数据格式 = TAB 缩进树**：LLM 输出、用户粘贴、AI 修改回传，全部同一格式（用户示例格式），树引擎负责与 mind-elixir JSON 互转。
 2. **mind-elixir 用源码自打包**：npm 发行包不含拖拽插件（v5 拖拽是独立源码文件），用 esbuild 把 `src/index.ts + plugin/nodeDraggable + operationHistory + contextMenu` 打成 IIFE 放入 assets；产物：`MindElixirFull.iife.js/.css`。再生成方法见下。
-3. **长录音**：解码按块（15s）→ 逐块识别拼接；生成阶段 >5000 字先分段提炼再合并，避免超上下文。
+3. **长录音（1.1.0 重做）**：解码按静音点出块（15~30s）→ 逐块识别拼接并回报真实进度；生成阶段按 token 预算语义分段（句末边界 + 1 句重叠）→ 逐段提炼 → 最多两层归并 → 一次生成，任何一次调用都不超窗口；429/5xx 走进程级节流 + 指数退避，段成果落盘可续跑。
 4. **拖动防回环**：MindMapPanel 记录 `localJson`，自己拖动产生的数据不回推画布，只有外部变化（AI 重生成/恢复版本）才 setData。
 5. **saveMap 只在 READY 状态写库**，避免与生成流程互相覆盖。
 6. **构建路径必须纯英文**（AGP 拒绝中文路径），项目在 `E:\engine\tingsiwei`。

@@ -32,25 +32,44 @@ object Prompts {
 
     fun generateUser(content: String): String = "请整理以下内容：\n\n$content"
 
-    /** 长文分块：提炼单段大纲 */
-    fun chunkSystem(): String = """
-你是知识提炼助手。请把用户给的这段录音转写文字提炼成层级大纲：
-- 一行一个要点，用 TAB 缩进表示层级
-- 只提炼这段里实际讲到的内容，保留关键数字、术语和例子
-- 不要输出思路，不要输出任何标签或解释
+    /** 输出被截断时的降级规则：让模型主动压缩体量，而不是硬截。 */
+    fun trimRule(): String =
+        "体量要求：导图每个节点不超过 12 个字，思路控制在 250 字以内；节点宁少勿断，标签必须闭合。"
+
+    /** 单段提炼：小节标题 + TAB 大纲 */
+    fun outlineSystem(): String = """
+你是知识提炼助手。用户给你一段较长录音中的其中一小段转写文字，请提炼成可供后续合并的大纲：
+第一行输出「小节：<不超过 12 字的主题概括>」
+之后用 TAB 缩进层级列出这段讲到的要点：
+- 保留关键术语、数字、法条名、例子和结论，去掉口水话和重复
+- 只提炼这段里实际讲到的内容，不要补充没讲到的知识
+- 不要输出思路、不要输出任何标签或解释、不要输出代码块
 """.trim()
 
-    fun chunkUser(chunk: String): String = chunk
+    fun outlineUser(chunk: String, seq: Int, total: Int): String =
+        "这是全文第 $seq/$total 小段（前后另有内容，只需提炼本段）：\n\n$chunk"
 
-    /** 长文分块：合并多段大纲 */
-    fun mergeSystem(allowExpand: Boolean): String = """
-以下是同一次录音/文章分段提炼出的多份大纲。请把它们合并、去重、整理成一份完整的思维导图和记忆思路。
-
-${generateSystem(allowExpand)}
+    /** 多份小节大纲 → 一份中层大纲（递归 reduce 的一层） */
+    fun groupMergeSystem(): String = """
+以下是同一次录音按顺序分小段提炼出的多份大纲。请把相邻内容归并成一份更高层的大纲：
+- 第一行输出「小节：<整体概括>」
+- 用 TAB 缩进层级，合并同类项、去掉重复，但不得丢掉术语、数字、法条名和结论
+- 保持原有先后顺序，不要输出解释、标签或代码块
 """.trim()
 
-    fun mergeUser(outlines: String, hint: String): String =
-        (if (hint.isNotBlank()) "整体主题提示：$hint\n\n" else "") + "分段大纲如下：\n\n$outlines"
+    fun groupMergeUser(outlines: List<String>, hint: String): String = buildString {
+        if (hint.isNotBlank()) appendLine("整体主题提示：$hint").appendLine()
+        appendLine("共 ${outlines.size} 份小节大纲，按顺序如下：")
+        outlines.forEachIndexed { i, o -> appendLine(); appendLine("〔${i + 1}〕").appendLine(o.trim()) }
+    }.trim()
+
+    /** 最终生成：输入已经是提炼过的大纲（而非原始长文） */
+    fun finalUser(outlineText: String, title: String): String = buildString {
+        if (title.isNotBlank()) appendLine("这次内容的主题（来自录音标题）：${title.trim()}").appendLine()
+        appendLine("下面是按录音顺序提炼的小节大纲，请据此产出完整的导图与思路：")
+        appendLine()
+        append(outlineText.trim())
+    }.trim()
 
     /** 按用户要求修改现有导图 */
     fun reviseUser(
