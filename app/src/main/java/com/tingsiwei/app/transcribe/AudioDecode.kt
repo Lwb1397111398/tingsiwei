@@ -3,13 +3,14 @@ package com.tingsiwei.app.transcribe
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import java.nio.ByteOrder
 
 /**
- * 把任意音频文件（m4a/mp3/wav…）解码为 16kHz 单声道 PCM，按"句子边界"逐块吐出，
- * 避免整段长录音一次性载入内存（一小时音频约 830MB，绝不能整体加载）。
+ * 把任意音频文件（m4a/mp3/wav…）解码为 16kHz 单声道 PCM，按"句子边界"逐块吐出。
  *
- * 出块点由 [SpeechCut] 在静音中点选择：块长落在 target~max 之间，
- * 既不把一句话劈成两半，也不会因为长时间静音而攒出超大块。
+ * 内存：样本只留在 [PcmBuffer] 里（上限 = [maxSeconds] 秒），整段载入一小时音频要 800MB，绝不允许。
+ * 出块：由 [SpeechScanner] 增量找静音中点，块长落在 target~max 之间，既不把一句话劈成两半，
+ * 也不会因为长时间静音而攒出超大块。
  */
 object AudioDecode {
 
@@ -45,39 +46,13 @@ object AudioDecode {
 
             val target = srcRate * targetSeconds
             val max = (srcRate * maxSeconds).coerceAtLeast(target + 1)
-            val minSilence = srcRate * silenceMs / 1000
+            val buffer = PcmBuffer(srcRate, max + srcRate)
+            val scanner = SpeechScanner(target, max, srcRate * silenceMs / 1000, silenceThresh)
 
             val codec = MediaCodec.createDecoderByType(mime)
             try {
                 codec.configure(fmt, null, null, 0)
                 codec.start()
-
-                var mono = ShortArray(max.coerceAtLeast(8192) + srcRate)
-                var monoLen = 0
-
-                /** 把缓冲区前 [count] 个源采样重采样成 16k float 交出去，其余留在缓冲区头部 */
-                fun emit(count: Int) {
-                    if (count <= 0) return
-                    val take = minOf(count, monoLen)
-                    val outLen = (take.toLong() * 16000 / srcRate).toInt()
-                    if (outLen > 0) {
-                        val out = FloatArray(outLen)
-                        val step = srcRate.toDouble() / 16000.0
-                        var pos = 0.0
-                        for (i in 0 until outLen) {
-                            val i0 = pos.toInt().coerceAtMost(take - 1)
-                            val i1 = minOf(i0 + 1, take - 1)
-                            val s0 = mono[i0].toFloat() / 32768f
-                            val s1 = mono[i1].toFloat() / 32768f
-                            out[i] = s0 + (s1 - s0) * (pos - i0).toFloat()
-                            pos += step
-                        }
-                        onChunk(out)
-                    }
-                    val remain = monoLen - take
-                    if (remain > 0) System.arraycopy(mono, take, mono, 0, remain)
-                    monoLen = remain.coerceAtLeast(0)
-                }
 
                 val info = MediaCodec.BufferInfo()
                 var inputDone = false
@@ -99,38 +74,24 @@ object AudioDecode {
                     }
                     val outIdx = codec.dequeueOutputBuffer(info, 10_000)
                     if (outIdx >= 0) {
-                        val outBuf = codec.getOutputBuffer(outIdx)!!
-                        outBuf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                        val shortBuf = outBuf.asShortBuffer()
-                        val frameCount = shortBuf.remaining() / channels
-                        if (monoLen + frameCount > mono.size) {
-                            mono = mono.copyOf((monoLen + frameCount) * 2)
+                        if (info.size > 0) {
+                            val outBuf = codec.getOutputBuffer(outIdx)!!
+                            outBuf.order(ByteOrder.LITTLE_ENDIAN)
+                            outBuf.position(info.offset)
+                            outBuf.limit(info.offset + info.size)
+                            val shortBuf = outBuf.asShortBuffer()
+                            buffer.append(shortBuf, shortBuf.remaining() / channels, channels)
                         }
-                        if (channels == 1) {
-                            shortBuf.get(mono, monoLen, frameCount)
-                        } else {
-                            val tmp = ShortArray(frameCount)
-                            var sIdx = 0
-                            for (fr in 0 until frameCount) {
-                                var acc = 0
-                                for (ch in 0 until channels) acc += shortBuf.get(sIdx + ch).toInt()
-                                tmp[fr] = (acc / channels).toShort()
-                                sIdx += channels
-                            }
-                            shortBuf.position(shortBuf.position() + frameCount * channels)
-                            System.arraycopy(tmp, 0, mono, monoLen, frameCount)
-                        }
-                        monoLen += frameCount
                         codec.releaseOutputBuffer(outIdx, false)
                         if (durationUs > 0 && info.presentationTimeUs > 0) {
                             onProgress((info.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
                         }
-                        val cut = SpeechCut.pickCut(mono, monoLen, target, max, minSilence, silenceThresh)
-                        if (cut > 0) emit(cut)
+                        val cut = scanner.pickCut(buffer.samples(), buffer.size)
+                        if (cut > 0) onChunk(buffer.takeResampled(cut))
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                     }
                 }
-                if (monoLen > 0) emit(monoLen)
+                if (buffer.size > 0) onChunk(buffer.takeAllResampled())
             } finally {
                 try {
                     codec.stop()

@@ -56,6 +56,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
+import com.tingsiwei.app.llm.SegmentStore
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.util.Formatters
@@ -265,6 +266,11 @@ class HomeViewModel : ViewModel() {
                     File(path).delete()
                 } catch (_: Exception) {
                 }
+            }
+            // 分段落盘的断点成果也要一起清掉，否则留成孤儿文件
+            try {
+                SegmentStore(File(App.get().filesDir, "pipeline")).clear(note.id)
+            } catch (_: Exception) {
             }
             db.noteDao().delete(note)
         }

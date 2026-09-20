@@ -496,6 +496,9 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         viewModelScope.launch {
             val n = db.noteDao().byId(noteId) ?: return@launch
             when {
+                // READY 但带提示 = 有段落没提炼成功：重新生成会走断点续跑，只补失败的段
+                n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() ->
+                    startPipeline { generateInternal() }
                 // AI 修改失败时旧导图仍然存在（修改只在成功后才覆盖），
                 // 直接恢复可用；绝不能重头生成把用户手动整理的导图清掉
                 n.mapJson != null ->

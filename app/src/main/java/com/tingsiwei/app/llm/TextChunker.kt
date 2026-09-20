@@ -6,7 +6,15 @@ package com.tingsiwei.app.llm
  */
 data class Chunk(val index: Int, val text: String, val overlapChars: Int)
 
-class ChunkPlan(val chunks: List<Chunk>, val noBoundary: Boolean, val targetTokens: Int) {
+/**
+ * @param chunkCapExceeded 分块大小已被窗口上限卡住、段数只能超过 maxChunks（宁可多几段也不撑破预算）
+ */
+class ChunkPlan(
+    val chunks: List<Chunk>,
+    val noBoundary: Boolean,
+    val targetTokens: Int,
+    val chunkCapExceeded: Boolean = false,
+) {
     val size: Int get() = chunks.size
 
     /** 去掉每块开头的重叠句后按序拼接，应与原文（trim 后）一致。 */
@@ -17,6 +25,9 @@ object TextChunker {
 
     const val OVERLAP_SENTENCES = 1
 
+    /** 重叠句长度占预算的比例上限：超过这个比例就不带重叠，否则会撑爆块预算 */
+    private const val OverlapShareOfTarget = 4
+
     private val StrongEnds = charArrayOf('。', '！', '？', '；', '!', '?', ';', '\n')
     private val WeakEnds = charArrayOf('，', ',', '、', '：', ':', ' ')
 
@@ -24,21 +35,34 @@ object TextChunker {
 
     fun hasStrongBoundary(text: String): Boolean = text.any { it in StrongEnds }
 
-    fun plan(text: String, targetTokens: Int, maxChunks: Int): ChunkPlan {
+    /**
+     * @param maxTargetTokens 单块允许的最大 token（一般传"窗口-输出余量"）。
+     *   为了把段数压到 maxChunks 以内而需要放大块长时，绝不允许越过这个上限——
+     *   越上限就宁可多分几段，否则每段都会被下游静默截断。
+     */
+    fun plan(text: String, targetTokens: Int, maxChunks: Int, maxTargetTokens: Int = Int.MAX_VALUE): ChunkPlan {
         val src = text.trim()
+        val ceiling = maxTargetTokens.coerceAtLeast(64)
         if (src.isEmpty()) return ChunkPlan(listOf(Chunk(0, "", 0)), false, targetTokens)
         val total = Tokens.estimate(src)
         if (total <= targetTokens) {
             return ChunkPlan(listOf(Chunk(0, src, 0)), !hasStrongBoundary(src), targetTokens)
         }
-        var target = targetTokens.coerceAtLeast(64)
+        var target = targetTokens.coerceIn(64, ceiling)
         var attempts = 0
         while (true) {
             val (groups, noBoundary) = build(src, target)
-            if (groups.size <= maxChunks || attempts++ >= 5) {
-                return ChunkPlan(groups.mapIndexed { i, g -> Chunk(i, g.first, g.second) }, noBoundary, target)
+            val atCeiling = target >= ceiling
+            if (groups.size <= maxChunks || atCeiling || attempts++ >= 5) {
+                return ChunkPlan(
+                    groups.mapIndexed { i, g -> Chunk(i, g.first, g.second) },
+                    noBoundary,
+                    target,
+                    atCeiling && groups.size > maxChunks,
+                )
             }
-            target = (target * (groups.size.toDouble() / maxChunks)).toInt() + 1
+            val scaled = (target * (groups.size.toDouble() / maxChunks)).toInt() + 1
+            target = minOf(scaled, ceiling)
         }
     }
 
@@ -59,7 +83,8 @@ object TextChunker {
                 groups.add(cur.toString() to carryChars)
                 // 只带一句"短"尾作重叠；尾巴本身就长时宁可不带，也不能撑爆预算
                 val tail = curPieces.drop(carry.size).takeLast(OVERLAP_SENTENCES)
-                carry = if (tail.sumOf { it.tokens } * 4 <= target) tail else emptyList()
+                val tailTokens = tail.sumOf { it.tokens }
+                carry = if (tailTokens * OverlapShareOfTarget <= target) tail else emptyList()
                 carryTokens = carry.sumOf { it.tokens }
                 carryChars = carry.sumOf { it.text.length }
                 packTarget = (target - carryTokens).coerceAtLeast(target / 2)
@@ -119,8 +144,7 @@ object TextChunker {
     }
 
     private fun hardSplit(text: String, target: Int): List<Piece> {
-        val perChunk = maxOf(16, target)
-        val step = (text.length * perChunk / maxOf(1, Tokens.estimate(text))).coerceAtLeast(8)
+        val step = (text.length * target / maxOf(1, Tokens.estimate(text))).coerceIn(8, text.length.coerceAtLeast(8))
         val out = ArrayList<Piece>()
         var i = 0
         while (i < text.length) {

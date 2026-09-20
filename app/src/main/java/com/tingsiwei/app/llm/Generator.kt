@@ -103,7 +103,7 @@ class Generator(
             )
             var parsed = LlmOutputParser.parse(ask(cfg, system, user))
             if (TreeText.parse(parsed.mapText).isEmpty()) {
-                parsed = LlmOutputParser.parse(ask(cfg, system, user + FormatReminder))
+                parsed = LlmOutputParser.parse(ask(cfg, system, user + Prompts.formatReminder()))
             }
             val forest = TreeText.parse(parsed.mapText)
             if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或换个说法")
@@ -160,7 +160,7 @@ class Generator(
         val user = Prompts.generateUser(content)
         var parsed = LlmOutputParser.parse(ask(cfg, system, user))
         if (TreeText.parse(parsed.mapText).isEmpty()) {
-            parsed = LlmOutputParser.parse(ask(cfg, system, user + FormatReminder))
+            parsed = LlmOutputParser.parse(ask(cfg, system, user + Prompts.formatReminder()))
         }
         if (TreeText.parse(parsed.mapText).isEmpty()) {
             throw LlmException("AI 没有按格式返回导图。可在设置里换一个模型再试。")
@@ -173,7 +173,7 @@ class Generator(
         system: String,
         user: String,
         temperature: Double = 0.4,
-    ): String = client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature, null)
+    ): String = client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature, FinalOutTokens)
 
     private fun friendly(e: Exception): String = when (e) {
         is LlmException -> e.message ?: "接口错误"
@@ -185,8 +185,6 @@ class Generator(
     private fun now(): Long = System.currentTimeMillis()
 
     private companion object {
-        const val FinalOutTokens = 2048
-        const val FormatReminder =
-            "\n\n（注意：上一次输出格式不对。请严格输出 <导图>…</导图> 与 <思路>…</思路> 两部分，导图用 TAB 缩进。）"
+        const val FinalOutTokens = LongTextPipeline.FinalOutTokens
     }
 }

@@ -25,21 +25,16 @@ class LlmSession(
 ) {
 
     data class Policy(
-        val contextWindow: Int = 16384,
-        val minIntervalMs: Long = 1200L,
+        val contextWindow: Int = LlmPolicy.DEFAULT_CONTEXT_WINDOW,
+        val minIntervalMs: Long = LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
         val maxRetries: Int = LlmPolicy.MAX_RETRIES,
         val conservative: Boolean = false,
     )
 
-    class Recorded(val url: String, val body: String)
-
-    /** 每次真实发出都记一条，测试据此断言调用次数与每次请求的输入规模。 */
-    val requests = mutableListOf<Recorded>()
-
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val intervalMs: Long
-        get() = if (policy.conservative) policy.minIntervalMs * 2 else policy.minIntervalMs
+    private val window: Int get() = LlmPolicy.windowFor(policy.contextWindow, policy.conservative)
+    private val intervalMs: Long get() = LlmPolicy.intervalFor(policy.minIntervalMs, policy.conservative)
 
     suspend fun chat(
         baseUrl: String,
@@ -48,15 +43,10 @@ class LlmSession(
         system: String,
         user: String,
         temperature: Double = 0.4,
-        desiredOutTokens: Int = 2048,
+        desiredOutTokens: Int = LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
     ): String {
         require(model.isNotBlank()) { "请先在设置里选择模型" }
-        val fit = Tokens.fit(
-            contextWindow = if (policy.conservative) policy.contextWindow / 2 else policy.contextWindow,
-            system = system,
-            user = user,
-            desiredOut = desiredOutTokens,
-        )
+        val fit = Tokens.fit(window, system, user, desiredOutTokens)
         val payload = buildJsonObject {
             put("model", model.trim())
             put("temperature", temperature)
@@ -85,11 +75,11 @@ class LlmSession(
         system: String,
         user: String,
         temperature: Double = 0.4,
-        desiredOutTokens: Int = 2048,
+        desiredOutTokens: Int = LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
         degradeRule: String = "",
     ): String = try {
         chat(baseUrl, apiKey, model, system, user, temperature, desiredOutTokens)
-    } catch (e: LlmCallError.Truncated) {
+    } catch (e: LlmError.Truncated) {
         chat(baseUrl, apiKey, model, "$system\n$degradeRule", user, temperature, desiredOutTokens)
     }
 
@@ -104,28 +94,25 @@ class LlmSession(
         var attempt = 0
         while (true) {
             val outcome: Any = try {
-                val resp = gate.acquire(intervalMs) { requests.add(Recorded(url, body)); transport.post(url, headers, body) }
+                val resp = gate.acquire(intervalMs) { transport.post(url, headers, body) }
                 classify(resp) ?: resp
-            } catch (e: LlmCallError) {
+            } catch (e: LlmError) {
                 e
             }
             if (outcome is Transport.RawResp) return outcome
-            val err = outcome as LlmCallError
+            val err = outcome as LlmError
             if (!err.retryable || attempt >= policy.maxRetries) throw err
-            sleeper.sleep(err.retryAfterMs ?: LlmPolicy.backoffMs(attempt, rng))
+            // Retry-After 与指数退避取大，避免渠道回 0/1 秒时变成疯狂重打
+            sleeper.sleep(maxOf(err.retryAfterMs ?: 0L, LlmPolicy.backoffMs(attempt, rng)))
             attempt++
         }
     }
 
-    private fun classify(resp: Transport.RawResp): LlmCallError? = when {
+    private fun classify(resp: Transport.RawResp): LlmError? = when {
         resp.code in 200..299 -> null
-        resp.code == 429 -> LlmCallError.RateLimited(
-            429,
-            LlmPolicy.retryAfterMs(resp.headers["retry-after"] ?: resp.headers["Retry-After"], resp.body),
-            resp.body.take(200),
-        )
-        resp.code in 500..599 -> LlmCallError.Server(resp.code, resp.body.take(200))
-        else -> LlmCallError.Client(resp.code, resp.body.take(200))
+        resp.code == 429 -> LlmError.RateLimited(429, LlmPolicy.retryAfterMs(resp.headers["retry-after"], resp.body))
+        resp.code in 500..599 || resp.code == 408 || resp.code == 425 -> LlmError.Server(resp.code)
+        else -> LlmError.Reject(resp.code)
     }
 
     private fun authHeaders(apiKey: String): Map<String, String> =
@@ -133,27 +120,25 @@ class LlmSession(
         else mapOf("Content-Type" to "application/json", "Authorization" to "Bearer ${apiKey.trim()}")
 
     private fun parseContent(body: String): String {
-        val obj = try {
-            json.parseToJsonElement(body).jsonObject
-        } catch (e: Exception) {
-            throw LlmCallError.BadFormat(body.take(200))
-        }
+        val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            ?: throw LlmError.BadFormat()
         val choice = (obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
-            ?: throw LlmCallError.EmptyContent(body.take(200))
+            ?: throw LlmError.EmptyContent()
         val finish = (choice["finish_reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val raw = choice["message"]?.jsonObject?.get("content")
-        val content = when (raw) {
-            is JsonPrimitive -> raw.content
+        val raw = (choice["message"] as? JsonObject)?.get("content")
+        val content = when {
+            raw is JsonPrimitive && raw.isString -> raw.content
             // 个别兼容接口把 content 返回成分段数组
-            is JsonArray -> raw.mapNotNull { part ->
+            raw is JsonArray -> raw.mapNotNull { part ->
                 (part as? JsonObject)?.get("text")?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content
             }.joinToString("")
-            null -> ""
             else -> ""
         }
-        if (finish == "length" && content.isBlank()) throw LlmCallError.Truncated(body.take(200))
-        content.takeIf { it.isNotBlank() } ?: throw LlmCallError.EmptyContent(body.take(200))
-        if (finish == "length") throw LlmCallError.Truncated(content.take(200))
+        if (content.isBlank()) {
+            if (finish == "length") throw LlmError.Truncated()
+            throw LlmError.EmptyContent()
+        }
+        if (finish == "length") throw LlmError.Truncated()
         return content
     }
 

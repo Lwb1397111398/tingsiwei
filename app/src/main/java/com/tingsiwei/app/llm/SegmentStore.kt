@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import java.io.File
 import java.security.MessageDigest
@@ -20,6 +19,7 @@ class SegmentStore(private val root: File) {
 
     private fun fileFor(noteId: Long) = File(root, "segments-$noteId.json")
 
+    /** 任何异常/损坏都退化成"没有断点"，绝不让生成流程因此失败 */
     fun load(noteId: Long, fingerprint: String): Map<Int, String> = try {
         val f = fileFor(noteId)
         if (!f.isFile) emptyMap() else parse(f.readText(), fingerprint)
@@ -32,33 +32,37 @@ class SegmentStore(private val root: File) {
         val obj = json.parseToJsonElement(text).jsonObject
         if (obj["fingerprint"]?.jsonPrimitive?.content != fingerprint) return emptyMap()
         val segs = obj["segments"] as? JsonObject ?: return emptyMap()
-        return segs.mapNotNull { (k, v) ->
-            val idx = k.toIntOrNull() ?: return@mapNotNull null
-            val content = v.jsonPrimitive.contentOrNullSafe() ?: return@mapNotNull null
-            if (content.isBlank()) null else idx to content
+        // 单个坏条目跳过即可，不能整份作废（那会让断点续跑白做）
+        return segs.mapNotNull { (key, value) ->
+            val index = key.toIntOrNull() ?: return@mapNotNull null
+            val content = runCatching { value.jsonPrimitive.content }.getOrNull()?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            index to content
         }.toMap()
     }
 
+    /** 先写临时文件再替换；替换失败就直接写，保证不留下半截 JSON */
     fun save(noteId: Long, fingerprint: String, done: Map<Int, String>) {
+        val payload = buildJsonObject {
+            put("fingerprint", fingerprint)
+            put(
+                "segments", buildJsonObject {
+                    done.forEach { (index, text) -> put(index.toString(), text) }
+                }
+            )
+        }.toString()
         try {
             root.mkdirs()
-            val payload = buildJsonObject {
-                put("fingerprint", fingerprint)
-                put("noteId", noteId)
-                put("updatedAt", System.currentTimeMillis())
-                put(
-                    "segments", buildJsonObject {
-                        done.forEach { (i, t) -> put(i.toString(), t) }
-                    }
-                )
-            }
             val f = fileFor(noteId)
-            val tmp = File(f.parentFile, f.name + ".tmp")
-            tmp.writeText(payload.toString())
+            val tmp = File(f.parentFile, "${f.name}.${System.nanoTime()}.tmp")
+            tmp.writeText(payload)
             if (f.exists()) f.delete()
-            tmp.renameTo(f)
+            if (!tmp.renameTo(f)) {
+                f.writeText(payload)
+                tmp.delete()
+            }
         } catch (e: Exception) {
-            // 断点存储失败不影响本次生成，只是下次要重来
+            // 断点存储失败不影响本次生成，只是下次要从头提炼
         }
     }
 
@@ -69,13 +73,10 @@ class SegmentStore(private val root: File) {
         }
     }
 
-    private fun kotlinx.serialization.json.JsonElement.contentOrNullSafe(): String? =
-        runCatching { jsonPrimitive.content }.getOrNull()
-
     companion object {
         fun fingerprint(content: String, params: String): String {
-            val md = MessageDigest.getInstance("SHA-1")
-            val digest = md.digest((content + "\u0000" + params).toByteArray(Charsets.UTF_8))
+            val digest = MessageDigest.getInstance("SHA-1")
+                .digest((content + "\u0000" + params).toByteArray(Charsets.UTF_8))
             return digest.joinToString("") { "%02x".format(it) }
         }
     }
