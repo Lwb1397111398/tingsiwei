@@ -12,10 +12,10 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
-/** 面向用户的接口异常，message 本身就是能看懂的中文提示。 */
+/** 非接口层的用户可见错误（内容空、格式不对等）。[LlmError] 的 message 本身就是中文提示。 */
 class LlmException(message: String) : RuntimeException(message)
 
-/** OpenAI 兼容接口客户端：读设置 → 组装 [LlmSession] → 校验地址。重试/预算都在 [LlmSession] 里。 */
+/** OpenAI 兼容接口客户端：读设置 → 规范化地址 → 组装 [LlmSession]。重试/预算/限流都在 [LlmSession] 里。 */
 class LlmClient(
     private val settings: SettingsRepository,
     private val transport: Transport = OkHttpTransport,
@@ -24,27 +24,14 @@ class LlmClient(
     private val rng: () -> Double = { Random.nextDouble() },
 ) {
 
-    /** 把用户填的地址规范化为以 /v1 结尾的基础地址；忘写协议时默认 https */
-    fun normalizeBase(url: String): String {
-        var u = url.trim().trimEnd('/')
-        if (u.isNotEmpty() && !u.startsWith("http://", true) && !u.startsWith("https://", true)) {
-            u = "https://$u"
-        }
-        if (u.endsWith("/chat/completions")) u = u.removeSuffix("/chat/completions")
-        if (!u.endsWith("/v1")) u = "$u/v1"
-        return u
-    }
-
     suspend fun listModels(baseUrl: String, apiKey: String): List<String> = withContext(Dispatchers.IO) {
-        val base = requireBaseUrl(baseUrl)
-        try {
-            session().listModels(base, apiKey)
-        } catch (e: LlmError) {
-            throw LlmException(e.message ?: "获取模型列表失败")
-        }
+        session().listModels(endpoint(baseUrl), apiKey)
     }
 
-    /** 单轮对话（非流式）。system 可为空。429/5xx/网络抖动自动退避重试，输出截断则精简重问一次。 */
+    /**
+     * 单轮对话（非流式）。system 可为空。429/5xx/网络抖动自动退避重试，输出截断则精简重问一次。
+     * 出错时抛 [LlmError]（message 已是给用户看的中文），调用方直接展示即可。
+     */
     suspend fun chat(
         baseUrl: String,
         apiKey: String,
@@ -54,22 +41,20 @@ class LlmClient(
         temperature: Double = 0.4,
         maxTokens: Int? = null,
     ): String = withContext(Dispatchers.IO) {
-        val base = requireBaseUrl(baseUrl)
-        try {
-            session().chatWithDegrade(
-                baseUrl = base,
-                apiKey = apiKey,
-                model = model,
-                system = system,
-                user = user,
-                temperature = temperature,
-                desiredOutTokens = maxTokens ?: LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
-                degradeRule = Prompts.trimRule(),
-            )
-        } catch (e: LlmError) {
-            throw LlmException(e.message ?: "接口调用失败")
-        }
+        session().chatWithDegrade(
+            baseUrl = endpoint(baseUrl),
+            apiKey = apiKey,
+            model = model,
+            system = system,
+            user = user,
+            temperature = temperature,
+            desiredOutTokens = maxTokens ?: LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
+            degradeRule = Prompts.trimRule(),
+        )
     }
+
+    private fun endpoint(baseUrl: String): String =
+        LlmEndpoint.normalize(baseUrl).ifBlank { throw LlmError.BadUrl() }
 
     private suspend fun session(): LlmSession {
         val cfg = settings.current()
@@ -79,19 +64,14 @@ class LlmClient(
             sleeper = sleeper,
             rng = rng,
             policy = LlmSession.Policy(
-                contextWindow = cfg.llmContextWindow.coerceIn(2048, 1_000_000),
-                minIntervalMs = cfg.llmMinIntervalMs.coerceIn(0L, 60_000L),
+                contextWindow = cfg.llmContextWindow.coerceIn(
+                    SettingsRepository.MinContextWindow,
+                    SettingsRepository.MaxContextWindow,
+                ),
+                minIntervalMs = cfg.llmMinIntervalMs.coerceIn(0L, SettingsRepository.MaxMinIntervalMs),
                 conservative = cfg.llmConservative,
             ),
         )
-    }
-
-    private fun requireBaseUrl(baseUrl: String): String {
-        val base = normalizeBase(baseUrl)
-        if (base.isBlank() || base == "/v1" || !base.startsWith("http")) {
-            throw LlmException("还没有填写接口地址，请到设置里填好接口地址和 KEY 再试")
-        }
-        return base
     }
 }
 
@@ -110,7 +90,8 @@ object OkHttpTransport : Transport {
             headers.forEach { (k, v) -> builder.header(k, v) }
             builder.post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
         } catch (e: IllegalArgumentException) {
-            throw LlmError.Network()
+            // 地址或头字段不成形：重试没有意义
+            throw LlmError.BadUrl()
         }
         return try {
             http.newCall(request).execute().use { resp ->

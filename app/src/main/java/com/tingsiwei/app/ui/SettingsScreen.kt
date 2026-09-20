@@ -50,6 +50,7 @@ import com.tingsiwei.app.App
 import com.tingsiwei.app.data.SettingsRepository
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
+import com.tingsiwei.app.llm.LlmPolicy
 import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
 import com.tingsiwei.app.util.Formatters
@@ -303,8 +304,8 @@ class SettingsViewModel : ViewModel() {
     val transcribeMode = MutableStateFlow(TranscribeMode.OFFLINE)
     val allowExpand = MutableStateFlow(true)
     val ttsRate = MutableStateFlow(1.0f)
-    val contextWindow = MutableStateFlow(16384)
-    val minIntervalMs = MutableStateFlow(1200L)
+    val contextWindow = MutableStateFlow(LlmPolicy.DEFAULT_CONTEXT_WINDOW)
+    val minIntervalMs = MutableStateFlow(LlmPolicy.DEFAULT_MIN_INTERVAL_MS)
     val conservative = MutableStateFlow(false)
     val modelState = MutableStateFlow(ModelStateUi())
     val message = MutableStateFlow<String?>(null)

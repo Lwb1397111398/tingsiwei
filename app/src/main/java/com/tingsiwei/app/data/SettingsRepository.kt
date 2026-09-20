@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.tingsiwei.app.llm.LlmPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -28,9 +29,9 @@ data class AppSettings(
     val allowExpand: Boolean,
     val ttsRate: Float,
     /** 模型上下文窗口（token），用于预算每次请求的输入+输出 */
-    val llmContextWindow: Int = 16384,
+    val llmContextWindow: Int = LlmPolicy.DEFAULT_CONTEXT_WINDOW,
     /** 两次接口请求之间的最小间隔，避免自己把渠道 QPS 打满 */
-    val llmMinIntervalMs: Long = 1200L,
+    val llmMinIntervalMs: Long = LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
     /** 保守模式：更少分段、更大间隔、更小窗口，给限流严重的渠道 */
     val llmConservative: Boolean = false,
 )
@@ -57,8 +58,8 @@ class SettingsRepository(private val context: Context) {
             transcribeMode = p[K.transcribeMode] ?: TranscribeMode.OFFLINE,
             allowExpand = p[K.allowExpand] ?: true,
             ttsRate = p[K.ttsRate] ?: 1.0f,
-            llmContextWindow = p[K.llmContextWindow] ?: 16384,
-            llmMinIntervalMs = p[K.llmMinIntervalMs] ?: 1200L,
+            llmContextWindow = p[K.llmContextWindow] ?: LlmPolicy.DEFAULT_CONTEXT_WINDOW,
+            llmMinIntervalMs = p[K.llmMinIntervalMs] ?: LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
             llmConservative = p[K.llmConservative] ?: false,
         )
     }
@@ -75,8 +76,8 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLlmLimits(contextWindow: Int, minIntervalMs: Long, conservative: Boolean) {
         context.dataStore.edit { p ->
-            p[K.llmContextWindow] = contextWindow
-            p[K.llmMinIntervalMs] = minIntervalMs
+            p[K.llmContextWindow] = contextWindow.coerceIn(MinContextWindow, MaxContextWindow)
+            p[K.llmMinIntervalMs] = minIntervalMs.coerceIn(0L, MaxMinIntervalMs)
             p[K.llmConservative] = conservative
         }
     }
@@ -91,5 +92,11 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setTtsRate(rate: Float) {
         context.dataStore.edit { it[K.ttsRate] = rate }
+    }
+
+    companion object {
+        const val MinContextWindow = 2048
+        const val MaxContextWindow = 1_000_000
+        const val MaxMinIntervalMs = 60_000L
     }
 }

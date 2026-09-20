@@ -7,7 +7,7 @@ import kotlin.math.ceil
 /** HTTP 往来接缝：生产用 [OkHttpTransport]，单测注入假实现（不加任何测试依赖）。 */
 interface Transport {
     class RawResp(val code: Int, val body: String, val headers: Map<String, String>)
-    /** 只允许抛 [LlmCallError]，其余异常一律视为不可重试 */
+    /** 只允许抛 [LlmError]，其余异常由 [LlmSession] 兜底归类为不可重试 */
     fun post(url: String, headers: Map<String, String>, body: String): RawResp
 }
 
@@ -41,11 +41,13 @@ sealed class LlmError(message: String, val httpCode: Int = 0, val retryAfterMs: 
         when (code) {
             401, 403 -> "接口拒绝了请求，请检查 API KEY 是否正确、账户是否有余额"
             404 -> "接口地址不对（找不到对话接口），请检查设置里的接口地址"
-            429 -> "接口限流（HTTP 429），已自动重试仍未成功"
             else -> "接口返回错误 (HTTP $code)，请检查接口地址与模型名"
         },
         code,
     )
+
+    /** 地址本身不成形，重试无意义 */
+    class BadUrl : LlmError("接口地址格式不对，请检查设置里的接口地址（要以 http:// 或 https:// 开头）")
 
     class Network : LlmError("无法连接接口，请检查手机网络和设置里的接口地址")
     class Timeout : LlmError("请求超时，可稍后重试，或在设置里换个更快的模型")
@@ -84,6 +86,20 @@ class RateGate(
 /** 进程级闸门：chat / listModels / 测试连接 全部共用，避免多处 new 客户端让限流形同虚设。 */
 object GlobalGate {
     val shared = RateGate()
+}
+
+/** 用户手填接口地址的规范化。纯函数，单独放这里才能被 JVM 单测覆盖。 */
+object LlmEndpoint {
+
+    /** 规范化为以 /v1 结尾的基础地址；忘写协议时默认 https。返回空串表示地址不可用。 */
+    fun normalize(url: String): String {
+        var u = url.trim().trimEnd('/')
+        if (u.isEmpty()) return ""
+        if (!u.startsWith("http://", true) && !u.startsWith("https://", true)) u = "https://$u"
+        if (u.endsWith("/chat/completions", true)) u = u.removeSuffix("/chat/completions")
+        if (!u.endsWith("/v1", true)) u = "$u/v1"
+        return u
+    }
 }
 
 object LlmPolicy {

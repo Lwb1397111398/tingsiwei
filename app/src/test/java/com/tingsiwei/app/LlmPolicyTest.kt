@@ -2,10 +2,13 @@ package com.tingsiwei.app
 
 import com.tingsiwei.app.llm.ClockSource
 import com.tingsiwei.app.llm.Complete
+import com.tingsiwei.app.llm.LlmEndpoint
 import com.tingsiwei.app.llm.LlmError
+import com.tingsiwei.app.llm.LlmException
 import com.tingsiwei.app.llm.LlmPolicy
 import com.tingsiwei.app.llm.LlmSession
 import com.tingsiwei.app.llm.LongTextPipeline
+import com.tingsiwei.app.llm.OkHttpTransport
 import com.tingsiwei.app.llm.Prompts
 import com.tingsiwei.app.llm.RateGate
 import com.tingsiwei.app.llm.SegmentStore
@@ -14,8 +17,6 @@ import com.tingsiwei.app.llm.TextChunker
 import com.tingsiwei.app.llm.Tokens
 import com.tingsiwei.app.llm.Transport
 import com.tingsiwei.app.mindmap.TreeText
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
@@ -251,17 +252,13 @@ class LlmPolicyTest {
     }
 
     @Test
-    fun `f2 并发取号各得不同号位`() {
+    fun `f2 连续取号互不重复且严格递增一个间隔`() {
         val time = FakeTime()
         val gate = RateGate(time, time)
-        val slots = java.util.Collections.synchronizedList(mutableListOf<Long>())
-        runBlocking {
-            kotlinx.coroutines.coroutineScope {
-                repeat(8) { launch(kotlinx.coroutines.Dispatchers.Unconfined) { gate.acquire(500L) { s -> slots.add(s) } } }
-            }
-        }
+        val slots = mutableListOf<Long>()
+        runBlocking { repeat(8) { gate.acquire(500L) { s -> slots.add(s) } } }
         assertEquals(8, slots.toSet().size)
-        assertEquals((0 until 8).map { it * 500L }.toSet(), slots.toSet())
+        assertEquals((0 until 8).map { it * 500L }, slots)
     }
 
     @Test
@@ -418,6 +415,74 @@ class LlmPolicyTest {
             result.stats.maxInputTokens <= 16384,
         )
         dir.deleteRecursively()
+    }
+
+    @Test
+    fun `zz2 生产路径上 KEY 不对也必须只打一次就中止`() {
+        // 走真实的 LlmSession（不是假 Complete），验证 Reject 能穿过客户端边界被流水线识别
+        val time = FakeTime()
+        var posts = 0
+        val unauthorized = object : Transport {
+            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+                posts++
+                return resp(401, """{"error":{"message":"invalid api key"}}""")
+            }
+        }
+        val session = LlmSession(unauthorized, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
+        val dir = File(System.getProperty("java.io.tmpdir"), "tsw-401-${System.nanoTime()}")
+        val pipeline = LongTextPipeline(
+            complete = Complete { system, user, temperature, out ->
+                session.chat("https://x/v1", "bad-key", "m", system, user, temperature, out)
+            },
+            store = SegmentStore(dir),
+            contextWindow = 16384,
+        )
+        try {
+            runBlocking { pipeline.run(77L, lecture(40000), "标题", true) }
+            fail("应中止")
+        } catch (e: LlmException) {
+            assertTrue("要带上接口给的提示：${e.message}", e.message!!.contains("API KEY"))
+            assertEquals("第一段被拒就该停手，不能把剩下的段全打一遍", 1, posts)
+            assertTrue("不该有任何退避等待", time.waits.isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `m 接口地址规范化`() {
+        assertEquals("https://a.com/v1", LlmEndpoint.normalize("a.com"))
+        assertEquals("https://a.com/v1", LlmEndpoint.normalize("https://a.com/"))
+        assertEquals("https://a.com/v1", LlmEndpoint.normalize("https://a.com/v1"))
+        assertEquals("https://a.com/x/v1", LlmEndpoint.normalize("https://a.com/x/v1"))
+        assertEquals("http://127.0.0.1:8080/v1", LlmEndpoint.normalize("http://127.0.0.1:8080"))
+        assertEquals(
+            "https://a.com/v1",
+            LlmEndpoint.normalize("https://a.com/v1/chat/completions"),
+        )
+        assertEquals("", LlmEndpoint.normalize("   "))
+    }
+
+    @Test
+    fun `m2 地址不成形时不重试直接给中文提示`() {
+        val time = FakeTime()
+        // 用真实传输层：OkHttp 在解析非法地址时就抛，不需要联网
+        val session = LlmSession(OkHttpTransport, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
+        try {
+            runBlocking { session.chat("not a url", "k", "m", "sys", "u") }
+            fail("应抛 BadUrl")
+        } catch (e: LlmError.BadUrl) {
+            assertFalse(e.retryable)
+            assertTrue(e.message!!.contains("接口地址"))
+            assertTrue("非法地址不该退避重试", time.waits.isEmpty())
+        }
+    }
+
+    private fun lecture(chars: Int): String {
+        val unit = "老师在这里讲解了一个知识点并举了例子，然后给出结论和注意事项。"
+        val sb = StringBuilder()
+        while (sb.length < chars) sb.append(unit).append('\n')
+        return sb.substring(0, chars)
     }
 }
 

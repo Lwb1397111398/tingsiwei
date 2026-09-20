@@ -1,5 +1,6 @@
 package com.tingsiwei.app.llm
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -45,7 +46,7 @@ class LlmSession(
         temperature: Double = 0.4,
         desiredOutTokens: Int = LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
     ): String {
-        require(model.isNotBlank()) { "请先在设置里选择模型" }
+        if (model.isBlank()) throw LlmException("请先在设置里选择模型")
         val fit = Tokens.fit(window, system, user, desiredOutTokens)
         val payload = buildJsonObject {
             put("model", model.trim())
@@ -64,7 +65,14 @@ class LlmSession(
             })
         }
         val resp = call("$baseUrl/chat/completions", authHeaders(apiKey), payload.toString())
-        return parseContent(resp.body)
+        // 解析层任何意外都归成"坏格式"，不把英文异常甩到界面上
+        return try {
+            parseContent(resp.body)
+        } catch (e: LlmError) {
+            throw e
+        } catch (e: Exception) {
+            throw LlmError.BadFormat()
+        }
     }
 
     /** 输出被截断时，带一条"精简"规则再问一次；仍截断才放弃。 */
@@ -96,8 +104,13 @@ class LlmSession(
             val outcome: Any = try {
                 val resp = gate.acquire(intervalMs) { transport.post(url, headers, body) }
                 classify(resp) ?: resp
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: LlmError) {
                 e
+            } catch (e: Exception) {
+                // 传输层漏出来的意外异常按可重试的网络错误处理，不外泄英文堆栈
+                LlmError.Network()
             }
             if (outcome is Transport.RawResp) return outcome
             val err = outcome as LlmError
