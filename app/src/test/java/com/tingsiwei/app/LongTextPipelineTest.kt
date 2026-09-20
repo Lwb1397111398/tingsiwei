@@ -266,15 +266,16 @@ class LongTextPipelineTest {
     }
 
     @Test
-    fun `每段都失败时抛出可读错误而不是静默空图`() {
+    fun `连续多段失败时及早收手不把手里的额度打光`() {
         val (store, dir) = tempStore()
-        val all = (0 until 40).toSet()
-        val pipeline = LongTextPipeline(FakeLLM(failSegments = all), store, contextWindow = 16384)
+        val fake = FakeLLM(failSegments = (0 until 40).toSet())
+        val pipeline = LongTextPipeline(fake, store, contextWindow = 16384)
         try {
             runBlocking { pipeline.run(6L, lecture(40000), "标题", true) }
             assertTrue("应抛异常", false)
         } catch (e: LlmException) {
-            assertTrue(e.message!!.contains("每一段"))
+            assertTrue("要说清已停止：${e.message}", e.message!!.contains("连续") && e.message!!.contains("补全"))
+            assertTrue("最多打 3 段就该停，实为 ${fake.calls} 次", fake.calls <= 3 * 2)
         }
         dir.deleteRecursively()
     }

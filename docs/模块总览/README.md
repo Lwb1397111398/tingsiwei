@@ -38,7 +38,7 @@
 - 仓库：阿里云镜像（settings.gradle.kts）；SDK：`local.properties` → `E:/engine/androidstudioSDK`
 - 命令：`GRADLE_USER_HOME=E:/engine/.gradle gradle.bat -p E:\engine\tingsiwei assembleDebug`
 - 产物：`app/build/outputs/apk/debug/app-debug.apk`
-- 单元测试：`testDebugUnitTest`（**共 98 例**：`TreeTextTest` 9、`LlmOutputParserTest` 5、`LlmPolicyTest` 25、`TextChunkerTest` 18、`LongTextPipelineTest` 14、`SpeechCutTest` 13、`PcmBufferTest` 9；全部纯 JVM，不依赖设备，不加新测试依赖，用 `runBlocking` + 手写 fake + 可注入时钟/等待）
+- 单元测试：`testDebugUnitTest`（**共 98 例**：`TreeTextTest` 9、`LlmOutputParserTest` 5、`LlmPolicyTest` 27、`TextChunkerTest` 18、`LongTextPipelineTest` 17、`SpeechCutTest` 13、`PcmBufferTest` 9；全部纯 JVM，不依赖设备，不加新测试依赖，用 `runBlocking` + 手写 fake + 可注入时钟/等待）
 - 导图前端资源再生成：`esbuild entry.ts --bundle --format=iife --global-name=MECore --loader:.svg=text "--define:import.meta.env.MODE=\"full\""`（源码 `E:\engine\me-core\mind-elixir-core-5.15.1`）
 
 ## 坑（冒烟测试实测踩过）

@@ -391,7 +391,7 @@ private fun VersionsSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(16.dp).fillMaxWidth()) {
-            Text("版本历史（AI 修改前的快照）", style = MaterialTheme.typography.titleMedium)
+            Text("版本历史（每次 AI 改动前的快照）", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             if (versions.isEmpty()) {
                 Text("还没有快照。让 AI 修改导图后会自动保存。", style = MaterialTheme.typography.bodyMedium)
@@ -572,6 +572,8 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
     }
 
     fun restore(versionId: Long) {
+        // 转写/生成进行中不能改版本：在飞的那次写库用的是开跑前的快照，会把恢复结果覆盖掉
+        if (pipelineJob?.isActive == true) return
         viewModelScope.launch {
             busyStage.value = "正在恢复版本…"
             Generator(db, settingsRepo).restoreVersion(noteId, versionId)

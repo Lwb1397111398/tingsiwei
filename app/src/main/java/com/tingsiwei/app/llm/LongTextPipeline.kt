@@ -82,6 +82,7 @@ class LongTextPipeline(
     private var maxInputTokens = 0
     private var failureHint: String? = null
     private var consecutiveFatal = 0
+    private var consecutiveFailed = 0
 
     /** 短到一次调用就能装下时，不必走分段流水线。 */
     fun useDirectRoute(content: String, systemPrompt: String, desiredOutTokens: Int): Boolean =
@@ -97,6 +98,7 @@ class LongTextPipeline(
         segmentCalls = 0; reduceCalls = 0; finalCalls = 0; reusedSegments = 0; maxInputTokens = 0
         failureHint = null
         consecutiveFatal = 0
+        consecutiveFailed = 0
 
         val system = Prompts.generateSystem(allowExpand)
         if (effectiveWindow < Tokens.estimate(system) + LlmPolicy.MIN_OUTPUT_TOKENS + InputSlack) {
@@ -124,7 +126,16 @@ class LongTextPipeline(
             val text = attempt.text
             if (text == null) {
                 failed.add(i)
+                consecutiveFailed++
+                // 额度耗尽/持续限流时别再往下打：最多 3 段连败就收手，成果已在断点里
+                if (consecutiveFailed >= MaxConsecutiveFailedSegments) {
+                    throw LlmException(
+                        "连续 $consecutiveFailed 段都没能提炼成功${failureHint?.let { "（$it）" } ?: ""}" +
+                            "，已停止以免继续浪费接口额度。稍后可点「补全」从断点继续"
+                    )
+                }
             } else {
+                consecutiveFailed = 0
                 done[i] = text
                 outlines[i] = text
                 store.save(noteId, fp, done)
@@ -305,5 +316,8 @@ class LongTextPipeline(
 
         /** 连续几次不可重试错误就停手（单次失败只跳过那一段） */
         const val MaxConsecutiveFatal = 2
+
+        /** 连续几段提炼不出来就收手，避免把额度打光 */
+        const val MaxConsecutiveFailedSegments = 3
     }
 }
