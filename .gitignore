@@ -1,0 +1,12 @@
+.gradle/
+.kotlin/
+build/
+*/build/
+local.properties
+hs_err_pid*.log
+replay_pid*.log
+*.apk
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
