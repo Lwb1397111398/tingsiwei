@@ -10,9 +10,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/** 一行一个节点、TAB 缩进的通用树节点 */
+/** 一行一个节点、TAB 缩进的通用树节点。topic 可变：AI 改写按路径就地改文字 */
 data class TreeNote(
-    val topic: String,
+    var topic: String,
     val children: MutableList<TreeNote> = mutableListOf(),
 )
 
