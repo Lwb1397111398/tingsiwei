@@ -39,16 +39,15 @@ class Generator(
             val cfg = settings.current()
             val system = Prompts.generateSystem(cfg.allowExpand)
             val pipeline = LongTextPipeline(
-                complete = { s, u, temperature, out ->
-                    client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, s, u, temperature, out)
+                complete = { s, u, out ->
+                    client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, s, u, out)
                 },
                 store = SegmentStore(File(App.get().filesDir, "pipeline")),
                 contextWindow = cfg.llmContextWindow,
                 conservative = cfg.llmConservative,
             )
             val outcome = if (pipeline.useDirectRoute(content, system, FinalOutTokens)) {
-                onStage("正在生成导图…")
-                directGenerate(cfg, content)
+                stagedOrDirect(cfg, content, note.title, onStage)
             } else {
                 val result = pipeline.run(noteId, content, note.title, cfg.allowExpand, onStage)
                 Outcome(result.mapText, result.thinking, result.notice())
@@ -68,6 +67,7 @@ class Generator(
                 )
             }
             val (mapJson, virtualRoot) = TreeText.toMapData(forest, note.title)
+            settings.setLastGoodModel(cfg.llmModel)
             dao.update(
                 note.copy(
                     mapJson = mapJson,
@@ -80,7 +80,7 @@ class Generator(
             )
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            dao.update(note.copy(status = NoteStatus.ERROR, errorMsg = friendly(e), updatedAt = now()))
+            dao.update(note.copy(status = NoteStatus.ERROR, errorMsg = withLastGoodHint(friendly(e)), updatedAt = now()))
         }
     }
 
@@ -106,27 +106,57 @@ class Generator(
         try {
             onStage("正在按你的要求修改…")
             val cfg = settings.current()
-            val system = Prompts.generateSystem(cfg.allowExpand)
-            val user = Prompts.reviseUser(
-                TreeText.fromMapData(oldMap, note.virtualRoot),
-                note.thinking.orEmpty(),
-                note.content.orEmpty(),
-                suggestion,
+            val forest = TreeText.parse(TreeText.fromMapData(oldMap, note.virtualRoot))
+            if (forest.isEmpty()) throw LlmException("当前导图数据异常，请先生成一次")
+            val result = ReviseFlow.run(
+                ReviseFlow.Context(
+                    forest = forest,
+                    thinking = note.thinking.orEmpty(),
+                    originalContent = note.content.orEmpty(),
+                    suggestion = suggestion,
+                    fullSystem = Prompts.generateSystem(cfg.allowExpand) + "\n" + Prompts.majorKeepRule(),
+                ),
+                object : ReviseFlow.Ask {
+                    override suspend fun diff(system: String, user: String) =
+                        client.chat(
+                            cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user,
+                            FinalOutTokens, degradeRule = Prompts.diffTrimRule(),
+                        )
+
+                    override suspend fun full(system: String, user: String) =
+                        client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user)
+                },
             )
-            var parsed = LlmOutputParser.parse(ask(cfg, system, user))
-            if (TreeText.parse(parsed.mapText).isEmpty()) {
-                parsed = LlmOutputParser.parse(ask(cfg, system, user + Prompts.formatReminder()))
+            when (result) {
+                is ReviseResult.Success -> {
+                    val (mapJson, virtualRoot) = TreeText.toMapData(result.forest, note.title)
+                    dao.update(
+                        note.copy(
+                            mapJson = mapJson,
+                            thinking = result.thinking ?: note.thinking,
+                            virtualRoot = virtualRoot,
+                            status = NoteStatus.READY,
+                            errorMsg = result.notice,
+                            updatedAt = now(),
+                        )
+                    )
+                }
+                is ReviseResult.Fail -> dao.update(
+                    note.copy(
+                        status = NoteStatus.ERROR,
+                        errorMsg = "修改失败：${result.reason}（原导图未改动，可重新提一次要求）",
+                        updatedAt = now(),
+                    )
+                )
             }
-            val forest = TreeText.parse(parsed.mapText)
-            if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或换个说法")
-            val (mapJson, virtualRoot) = TreeText.toMapData(forest, note.title)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: LlmError.Truncated) {
+            // 防御分支：ReviseFlow 已把截断归入 Fail，走到这里说明接入被绕过——绝不用半截导图覆盖完好的旧图
             dao.update(
                 note.copy(
-                    mapJson = mapJson,
-                    thinking = parsed.thinking.ifBlank { note.thinking },
-                    virtualRoot = virtualRoot,
-                    status = NoteStatus.READY,
-                    errorMsg = null,
+                    status = NoteStatus.ERROR,
+                    errorMsg = "修改失败：本次改动输出太长被截断（原导图未改动）。可以把要求拆小一点再试",
                     updatedAt = now(),
                 )
             )
@@ -177,28 +207,136 @@ class Generator(
     private suspend fun directGenerate(cfg: com.tingsiwei.app.data.AppSettings, content: String): Outcome {
         val system = Prompts.generateSystem(cfg.allowExpand)
         val user = Prompts.generateUser(content)
-        var parsed = LlmOutputParser.parse(ask(cfg, system, user))
-        if (TreeText.parse(parsed.mapText).isEmpty()) {
-            parsed = LlmOutputParser.parse(ask(cfg, system, user + Prompts.formatReminder()))
+        var ask = parseOrSalvage(cfg, system, user)
+        if (TreeText.parse(ask.parsed.mapText).isEmpty()) {
+            ask = parseOrSalvage(cfg, system, user + Prompts.formatReminder())
         }
-        if (TreeText.parse(parsed.mapText).isEmpty()) {
+        if (TreeText.parse(ask.parsed.mapText).isEmpty()) {
             throw LlmException("AI 没有按格式返回导图。可在设置里换一个模型再试。")
         }
-        return Outcome(parsed.mapText, parsed.thinking, null)
+        return Outcome(
+            ask.parsed.mapText,
+            ask.parsed.thinking,
+            if (ask.salvaged) "输出超出长度上限，已尽量保留生成的导图，可在导图页检查并让 AI 补全" else null,
+        )
+    }
+
+    /**
+     * 直连路由的正常路径是三段式（对应「先成思路、再优化拓展、导图从思路来」）：
+     * 起草思路（只读懂原文）→ 自查优化并按需拓展（拓展句标「（拓展）」）→ 只按定稿思路出导图。
+     * 思路定稿后导图不再重写思路，图文天然一致。一次成稿退居兜底：
+     * 窗口装不下三段、或起草就失败，都退回老路径；优化或出图失败则带着已有成果继续退，不推倒重来。
+     */
+    private suspend fun stagedOrDirect(
+        cfg: com.tingsiwei.app.data.AppSettings,
+        content: String,
+        title: String,
+        onStage: suspend (String) -> Unit,
+    ): Outcome {
+        val window = LlmPolicy.windowFor(cfg.llmContextWindow, cfg.llmConservative).coerceAtLeast(1024)
+        if (!StagedFlow.fits(window, Tokens.estimate(content))) return directGenerate(cfg, content)
+        return try {
+            stagedGenerate(cfg, content, title, onStage)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            directGenerate(cfg, content)
+        }
+    }
+
+    private suspend fun stagedGenerate(
+        cfg: com.tingsiwei.app.data.AppSettings,
+        content: String,
+        title: String,
+        onStage: suspend (String) -> Unit,
+    ): Outcome {
+        onStage("正在通读内容，起草思路…")
+        val draft = try {
+            StagedFlow.thinkingText(
+                ask(cfg, Prompts.draftThinkingSystem(), Prompts.draftThinkingUser(content), StagedFlow.DraftOutTokens)
+            )
+        } catch (e: LlmError.Truncated) {
+            StagedFlow.thinkingText(e.partialContent)
+        }
+        if (draft.isBlank()) return directGenerate(cfg, content)
+
+        onStage(if (cfg.allowExpand) "正在自查优化并拓展思路…" else "正在自查优化思路…")
+        val refined = try {
+            StagedFlow.thinkingText(
+                ask(
+                    cfg,
+                    Prompts.refineThinkingSystem(cfg.allowExpand),
+                    Prompts.refineThinkingUser(draft, content),
+                    StagedFlow.RefineOutTokens,
+                )
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            "" // 优化失败不致命：拿草稿继续出图
+        }
+        val thinking = refined.ifBlank { draft }
+
+        onStage("正在根据思路生成导图…")
+        return mapFromThinking(cfg, thinking, title) ?: directGenerate(cfg, content)
+    }
+
+    /** 第三步：思路 → 导图。思路就是定稿，直接沿用；出不来结构返回 null 让调用方兜底 */
+    private suspend fun mapFromThinking(
+        cfg: com.tingsiwei.app.data.AppSettings,
+        thinking: String,
+        title: String,
+    ): Outcome? {
+        val system = Prompts.mapFromThinkingSystem()
+        val user = Prompts.mapFromThinkingUser(thinking, title)
+        var parsed = parseOrSalvage(cfg, system, user).parsed
+        if (TreeText.parse(parsed.mapText).isEmpty()) {
+            parsed = parseOrSalvage(cfg, system, user + Prompts.mapOnlyReminder()).parsed
+        }
+        if (TreeText.parse(parsed.mapText).isEmpty()) return null
+        return Outcome(parsed.mapText, thinking, null)
+    }
+
+    private class AskResult(val parsed: LlmOutputParser.Parsed, val salvaged: Boolean)
+
+    /**
+     * ask 的截断抢救版：截断异常带回的部分内容能解析出导图结构就接着用；
+     * 抢救不出结构才把异常往上抛。解析不出格式时由调用方走 formatReminder 重问。
+     */
+    private suspend fun parseOrSalvage(
+        cfg: com.tingsiwei.app.data.AppSettings,
+        system: String,
+        user: String,
+    ): AskResult {
+        val raw = try {
+            ask(cfg, system, user)
+        } catch (e: LlmError.Truncated) {
+            val salvaged = LlmOutputParser.parsePartial(e.partialContent) ?: throw e
+            return AskResult(LlmOutputParser.parse(LlmOutputParser.render(salvaged)), true)
+        }
+        return AskResult(LlmOutputParser.parse(raw), false)
     }
 
     private suspend fun ask(
         cfg: com.tingsiwei.app.data.AppSettings,
         system: String,
         user: String,
-        temperature: Double = 0.4,
-    ): String = client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, temperature, FinalOutTokens)
+        outTokens: Int = FinalOutTokens,
+    ): String = client.chat(cfg.llmUrl, cfg.llmKey, cfg.llmModel, system, user, outTokens)
 
     private fun friendly(e: Exception): String = when (e) {
         is LlmException -> e.message ?: "接口错误"
         is UnknownHostException -> "无法连接服务器，请检查网络和接口地址"
         is SocketTimeoutException -> "请求超时，请重试或换更快的模型"
         else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /** 换模型后总失败时，把上次成功的模型名递到用户眼前，省得他自己回忆 */
+    private suspend fun withLastGoodHint(msg: String): String {
+        val cfg = settings.current()
+        val last = cfg.lastGoodModel
+        if (last.isNullOrBlank() || last == cfg.llmModel) return msg
+        return "$msg（上次成功用的是 $last，可到设置里切换试试）"
     }
 
     private fun now(): Long = System.currentTimeMillis()
