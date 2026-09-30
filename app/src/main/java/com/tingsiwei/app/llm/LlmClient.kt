@@ -38,8 +38,8 @@ class LlmClient(
         model: String,
         system: String,
         user: String,
-        temperature: Double = 0.4,
         maxTokens: Int? = null,
+        degradeRule: String = Prompts.trimRule(),
     ): String = withContext(Dispatchers.IO) {
         session().chatWithDegrade(
             baseUrl = endpoint(baseUrl),
@@ -47,9 +47,8 @@ class LlmClient(
             model = model,
             system = system,
             user = user,
-            temperature = temperature,
             desiredOutTokens = maxTokens ?: LlmPolicy.DEFAULT_MAX_OUTPUT_TOKENS,
-            degradeRule = Prompts.trimRule(),
+            degradeRule = degradeRule,
         )
     }
 
@@ -93,7 +92,22 @@ object OkHttpTransport : Transport {
             // 地址或头字段不成形：重试没有意义
             throw LlmError.BadUrl()
         }
-        return try {
+        return execute(request)
+    }
+
+    override fun get(url: String, headers: Map<String, String>): Transport.RawResp {
+        val request = try {
+            val builder = Request.Builder().url(url)
+            headers.forEach { (k, v) -> builder.header(k, v) }
+            builder.get().build()
+        } catch (e: IllegalArgumentException) {
+            throw LlmError.BadUrl()
+        }
+        return execute(request)
+    }
+
+    private fun execute(request: Request): Transport.RawResp =
+        try {
             http.newCall(request).execute().use { resp ->
                 val map = resp.headers.toMultimap().mapValues { it.value.firstOrNull().orEmpty() }
                 Transport.RawResp(resp.code, resp.body?.string().orEmpty(), map)
@@ -103,5 +117,4 @@ object OkHttpTransport : Transport {
         } catch (e: IOException) {
             throw LlmError.Network()
         }
-    }
 }
