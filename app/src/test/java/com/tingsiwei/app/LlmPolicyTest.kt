@@ -57,6 +57,9 @@ class LlmPolicyTest {
             times.add(time.nowMs())
             return if (queue.isNotEmpty()) queue.removeAt(0) else Transport.RawResp(200, chatBody("兜底回复"), emptyMap())
         }
+        // 单测只覆盖 chat 路径；listModels 走 GET 时不经此桩
+        override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+            throw AssertionError("单测不应触发 GET 请求")
     }
 
     private class H(val time: FakeTime, val transport: FakeTransport, val session: LlmSession)
@@ -151,6 +154,64 @@ class LlmPolicyTest {
     }
 
     @Test
+    fun `c3 截断重试会抬高输出上限`() {
+        // 窗口给足，否则两发都被预算夹到同一值、看不出抬升
+        val x = h(resp(200, chatBody("半截内容", "length")), ok(), contextWindow = 65_536)
+        runBlocking { x.session.chatWithDegrade("https://x/v1", "k", "m", "系统提示", "用户内容", degradeRule = "体量") }
+        assertEquals(2, x.transport.calls)
+        val first = maxOut(x.transport.bodies[0])
+        val second = maxOut(x.transport.bodies[1])
+        assertTrue("第二次 max_tokens 要抬高：$first -> $second", second > first)
+    }
+
+    @Test
+    fun `c4 两次都截断时异常带回较长的部分内容`() {
+        // 第二次更长：带回第二次的
+        val x = h(resp(200, chatBody("短的部分", "length")), resp(200, chatBody("明显更长一点的部分内容", "length")))
+        try {
+            runBlocking { x.session.chatWithDegrade("https://x/v1", "k", "m", "sys", "u", degradeRule = "x") }
+            fail("应抛 Truncated")
+        } catch (e: LlmError.Truncated) {
+            assertEquals("明显更长一点的部分内容", e.partialContent)
+        }
+        // 第二次反而更短：带回第一次的
+        val y = h(resp(200, chatBody("第一次就挺长的部分内容", "length")), resp(200, chatBody("短", "length")))
+        try {
+            runBlocking { y.session.chatWithDegrade("https://x/v1", "k", "m", "sys", "u", degradeRule = "x") }
+            fail("应抛 Truncated")
+        } catch (e: LlmError.Truncated) {
+            assertEquals("第一次就挺长的部分内容", e.partialContent)
+        }
+    }
+
+    @Test
+    fun `c5 渠道硬帽回 400 自动退回 8192 档再问一次`() {
+        val x = h(resp(400, """{"error":{"message":"max_tokens exceeds model limit"}}"""), ok())
+        val out = runBlocking {
+            x.session.chatWithDegrade("https://x/v1", "k", "m", "系统提示", "用户内容", degradeRule = "体量要求")
+        }
+        assertEquals("正常回复", out)
+        assertEquals(2, x.transport.calls)
+        assertTrue("默认请求就该带 16384 档", maxOut(x.transport.bodies[0]) > LlmPolicy.REJECT_FALLBACK_OUTPUT_TOKENS)
+        assertEquals(
+            "400 后第二发应退回保守档", LlmPolicy.REJECT_FALLBACK_OUTPUT_TOKENS,
+            maxOut(x.transport.bodies[1]),
+        )
+        assertTrue("退回档带体量规则", msg(x.transport.bodies[1], 0).contains("体量要求"))
+    }
+
+    @Test
+    fun `c6 401 与输出帽无关仍然快速失败`() {
+        val x = h(resp(401, """{"error":{"message":"invalid api key"}}"""))
+        try {
+            runBlocking { x.session.chatWithDegrade("https://x/v1", "bad", "m", "sys", "u") }
+            fail("应抛 Reject")
+        } catch (e: LlmError.Reject) {
+            assertEquals("认证失败不该借道退档重试", 1, x.transport.calls)
+        }
+    }
+
+    @Test
     fun `d 空内容与 401 不重试且不泄漏 KEY`() {
         val empty = h(resp(200, chatBody("")))
         try {
@@ -197,6 +258,8 @@ class LlmPolicyTest {
                 if (n == 1) throw LlmError.Network()
                 return Transport.RawResp(200, chatBody("正常回复"), emptyMap())
             }
+            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+                throw AssertionError("单测不应触发 GET 请求")
         }
         val session = LlmSession(flaky, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(minIntervalMs = 0))
         assertEquals("正常回复", runBlocking { session.chat("https://x/v1", "k", "m", "sys", "u") })
@@ -398,11 +461,13 @@ class LlmPolicyTest {
                 }
                 return resp(200, chatBody(out.replace("\n", "\\n")))
             }
+            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+                throw AssertionError("本测试不应触发 GET 请求")
         }
         val session = LlmSession(transport, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
         val pipeline = LongTextPipeline(
-            complete = Complete { system, user, temperature, out ->
-                session.chat("https://x/v1", "k", "m", system, user, temperature, out)
+            complete = Complete { system, user, out ->
+                session.chat("https://x/v1", "k", "m", system, user, out)
             },
             store = SegmentStore(dir),
             contextWindow = 16384,
@@ -427,12 +492,14 @@ class LlmPolicyTest {
                 posts++
                 return resp(401, """{"error":{"message":"invalid api key"}}""")
             }
+            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+                throw AssertionError("本测试不应触发 GET 请求")
         }
         val session = LlmSession(unauthorized, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
         val dir = File(System.getProperty("java.io.tmpdir"), "tsw-401-${System.nanoTime()}")
         val pipeline = LongTextPipeline(
-            complete = Complete { system, user, temperature, out ->
-                session.chat("https://x/v1", "bad-key", "m", system, user, temperature, out)
+            complete = Complete { system, user, out ->
+                session.chat("https://x/v1", "bad-key", "m", system, user, out)
             },
             store = SegmentStore(dir),
             contextWindow = 16384,
@@ -476,6 +543,61 @@ class LlmPolicyTest {
             assertTrue(e.message!!.contains("接口地址"))
             assertTrue("非法地址不该退避重试", time.waits.isEmpty())
         }
+    }
+
+    @Test
+    fun `m4 模型列表必须用GET并解析模型id`() {
+        val time = FakeTime()
+        var method = ""
+        val t = object : Transport {
+            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+                method = "POST"
+                return Transport.RawResp(404, """{"error":{"code":5,"message":"NOT_FOUND"}}""", emptyMap())
+            }
+            override fun get(url: String, headers: Map<String, String>): Transport.RawResp {
+                method = "GET"
+                assertEquals("https://token.sensenova.cn/v1/models", url)
+                return Transport.RawResp(
+                    200,
+                    """{"data":[{"id":"glm-5.2"},{"id":"deepseek-v4-flash"},{"name":"kimi-k3"}]}""",
+                    emptyMap(),
+                )
+            }
+        }
+        val session = LlmSession(t, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
+        val models = runBlocking { session.listModels("https://token.sensenova.cn/v1", "k") }
+        assertEquals("模型列表是只读端点，必须 GET（POST 会被不少渠道回 404）", "GET", method)
+        assertEquals(listOf("glm-5.2", "deepseek-v4-flash", "kimi-k3"), models)
+    }
+
+    @Test
+    fun `m5 渠道不给模型列表时 404 要翻译成人话而不是让用户怀疑地址`() {
+        val time = FakeTime()
+        val notFound = object : Transport {
+            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp =
+                Transport.RawResp(404, "x", emptyMap())
+            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+                Transport.RawResp(404, """{"error":{"code":5,"message":"NOT_FOUND"}}""", emptyMap())
+        }
+        val session = LlmSession(notFound, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
+        try {
+            runBlocking { session.listModels("https://x/v1", "k") }
+            fail("应抛出提示")
+        } catch (e: LlmException) {
+            assertTrue(e.message!!.contains("手动输入模型名"))
+            assertFalse(e.message!!.contains("接口地址不对"))
+        }
+    }
+
+    @Test
+    fun `m6 请求体不得携带temperature 严格渠道只收默认采样参数`() {
+        // 商汤 kimi-k3 等渠道对非 1 的 temperature 直接回 400，宁可少发也不碰各家参数红线
+        val x = h(ok())
+        runBlocking { x.session.chat("https://x/v1", "k", "m", "sys", "u") }
+        assertFalse(
+            "temperature 字段会让 kimi-k3 等严格渠道回 400：${x.transport.bodies[0]}",
+            x.transport.bodies[0].contains("temperature"),
+        )
     }
 
     private fun lecture(chars: Int): String {

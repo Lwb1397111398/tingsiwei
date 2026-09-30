@@ -9,6 +9,8 @@ interface Transport {
     class RawResp(val code: Int, val body: String, val headers: Map<String, String>)
     /** 只允许抛 [LlmError]，其余异常由 [LlmSession] 兜底归类为不可重试 */
     fun post(url: String, headers: Map<String, String>, body: String): RawResp
+    /** 模型列表等只读端点用 GET；OpenAI 兼容渠道对 POST /models 通常回 404 */
+    fun get(url: String, headers: Map<String, String>): RawResp
 }
 
 interface Sleeper { suspend fun sleep(ms: Long) }
@@ -41,7 +43,7 @@ sealed class LlmError(message: String, val httpCode: Int = 0, val retryAfterMs: 
         when (code) {
             401, 403 -> "接口拒绝了请求，请检查 API KEY 是否正确、账户是否有余额"
             404 -> "接口地址不对（找不到对话接口），请检查设置里的接口地址"
-            else -> "接口返回错误 (HTTP $code)，请检查接口地址与模型名"
+            else -> "接口返回错误 (HTTP $code)，多半是模型名不对或该模型不可用；可在设置里点「测试连接」验证，或换个模型"
         },
         code,
     )
@@ -53,7 +55,13 @@ sealed class LlmError(message: String, val httpCode: Int = 0, val retryAfterMs: 
     class Timeout : LlmError("请求超时，可稍后重试，或在设置里换个更快的模型")
     class BadFormat : LlmError("接口返回的不是有效 JSON，这个渠道可能不兼容，换个模型试试")
     class EmptyContent : LlmError("接口没有返回内容，请在设置里换一个模型再试")
-    class Truncated : LlmError("接口输出被长度上限截断，请在设置里开启「保守模式」或调小「上下文窗口」后重试")
+
+    /**
+     * 输出被长度上限截断。partialContent 带回已经生成出来的部分：
+     * 推理模型的思维链也计入输出上限，截断远比以前常见，能抢救的部分绝不整段作废。
+     */
+    class Truncated(val partialContent: String = "") :
+        LlmError("接口输出被长度上限截断，自动抬高输出上限重试后仍未完整。可点重试再试一次；反复出现建议换个模型，或关闭「允许 AI 拓展知识」减小体量")
 
     val retryable: Boolean
         get() = this is RateLimited || this is Server || this is Network || this is Timeout
@@ -108,9 +116,26 @@ object LlmPolicy {
     const val MAX_DELAY_MS = 60_000L
     const val MIN_OUTPUT_TOKENS = 512
     const val MIN_INPUT_ROOM_TOKENS = 256
-    const val DEFAULT_CONTEXT_WINDOW = 16384
+
+    /**
+     * 上下文窗口默认 128k：现在的主流模型（哪怕中转站限制）也远大于此，按老标准 16k 切分
+     * 只会把一篇长录音拆成一堆碎段、每段的输出预算被挤得更小。用户可在设置里改小给限流渠道。
+     */
+    const val DEFAULT_CONTEXT_WINDOW = 131_072
+
+    /** 旧版默认值：用于把老用户一次性迁到新默认（已在设置里改过的也会迁，改完可再调回并保持） */
+    const val LEGACY_DEFAULT_CONTEXT_WINDOW = 16_384
+
+    /**
+     * 单次输出上限默认 16384：推理模型的思维链计入输出上限（实测一次提问就能烧掉几百上千 token），
+     * 2026 年主流模型的单次输出普遍能到 16k~64k，8192 反而成了瓶颈。个别渠道 max_tokens 有硬帽：
+     * 400 类拒绝时按 [REJECT_FALLBACK_OUTPUT_TOKENS] 自动降一档重问一次；最终还会被上下文窗口预算夹住。
+     */
+    const val DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+
+    /** 渠道对 max_tokens 回 400（参数红线）时自动退回的保守档 */
+    const val REJECT_FALLBACK_OUTPUT_TOKENS = 8_192
     const val DEFAULT_MIN_INTERVAL_MS = 1200L
-    const val DEFAULT_MAX_OUTPUT_TOKENS = 2048
     private const val JITTER = 0.2
 
     /** Retry-After 只认数字秒（个人自用，不解析 HTTP-date）；≤0 视为未提供，交给指数退避。 */
