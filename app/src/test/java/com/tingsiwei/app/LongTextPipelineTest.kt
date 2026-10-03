@@ -28,18 +28,23 @@ class LongTextPipelineTest {
         val fatalKind: LlmError = LlmError.Reject(401),
         val failEvery: Int = 0,
         val failMerge: Boolean = false,
+        val failRefine: Boolean = false,
         val outlineUnits: Int = 20,
+        val failFinal: Boolean = false,
     ) : Complete {
         var calls = 0
         val inputs = mutableListOf<Int>()
+        val outTokens = mutableListOf<Int>()
         var segmentCalls = 0
         var mergeCalls = 0
+        var refineCalls = 0
 
         private fun filler(units: Int) = "要点内容若干举例说明。".repeat(units)
 
-        override suspend fun call(system: String, user: String, temperature: Double, desiredOutTokens: Int): String {
+        override suspend fun call(system: String, user: String, desiredOutTokens: Int): String {
             calls++
             inputs.add(Tokens.estimate(system) + Tokens.estimate(user))
+            outTokens.add(desiredOutTokens)
             val seq = Regex("第 (\\d+)/(\\d+) 小段").find(user)?.groupValues?.get(1)?.toInt()
             if (seq != null && fatalSegments?.contains(seq - 1) == true) throw fatalKind
             if (seq != null && seq - 1 in failSegments) throw LlmError.Server(500)
@@ -53,7 +58,12 @@ class LongTextPipelineTest {
                     mergeCalls++
                     if (failMerge) "" else "小节：归并组${calls}\n" + filler(outlineUnits)
                 }
-                else -> "<导图>\n总主题\n\t分支一\n\t\t叶子\n\t分支二\n</导图>\n<思路>\n因为所以的记忆叙述\n</思路>"
+                system.contains("定稿大纲") -> {
+                    refineCalls++
+                    if (failRefine) throw LlmError.Server(500)
+                    "小节：优化后大纲\n" + filler(outlineUnits)
+                }
+                else -> if (failFinal) throw LlmError.Server(500) else "<导图>\n总主题\n\t分支一\n\t\t叶子\n\t分支二\n</导图>\n<思路>\n因为所以的记忆叙述\n</思路>"
             }
         }
     }
@@ -284,24 +294,27 @@ class LongTextPipelineTest {
     fun `SegmentStore 往返 损坏容错 笔记互不干扰`() {
         val (store, dir) = tempStore()
         val fp = SegmentStore.fingerprint("内容A", "p1")
-        store.save(10L, fp, mapOf(0 to "大纲0", 2 to "大纲2"))
-        assertEquals(mapOf(0 to "大纲0", 2 to "大纲2"), store.load(10L, fp))
-        assertEquals("指纹不符必须全部作废", emptyMap<Int, String>(), store.load(10L, "other"))
-        assertEquals("别的笔记读不到", emptyMap<Int, String>(), store.load(11L, fp))
+        store.save(10L, fp, mapOf(0 to "大纲0", 2 to "大纲2"), mapOf("L1-aa" to "归并组"))
+        val snap = store.load(10L, fp)
+        assertEquals(mapOf(0 to "大纲0", 2 to "大纲2"), snap.segments)
+        assertEquals(mapOf("L1-aa" to "归并组"), snap.merge)
+        assertEquals("指纹不符必须全部作废", emptyMap<Int, String>(), store.load(10L, "other").segments)
+        assertEquals("别的笔记读不到", emptyMap<Int, String>(), store.load(11L, fp).segments)
 
         dir.mkdirs()
         File(dir, "segments-12.json").writeText("{ 这不是合法 json ")
-        assertEquals("损坏文件不能抛异常", emptyMap<Int, String>(), store.load(12L, fp))
+        assertEquals("损坏文件不能抛异常", emptyMap<Int, String>(), store.load(12L, fp).segments)
         File(dir, "segments-13.json").writeText(
             """{"fingerprint":"$fp","noteId":13,"segments":{"0":"", "x":"坏键", "1":"有效"}}"""
         )
-        assertEquals(mapOf(1 to "有效"), store.load(13L, fp))
+        assertEquals(mapOf(1 to "有效"), store.load(13L, fp).segments)
+        assertEquals("旧格式文件没有 merge 字段要按空处理", emptyMap<String, String>(), store.load(13L, fp).merge)
         File(dir, "segments-14.json").writeText(
             """{"fingerprint":"$fp","noteId":14,"segments":{"0":"坏值", "1":{"nested":"不是字符串"}}}"""
         )
-        assertEquals("单个坏值不能整份作废", mapOf(0 to "坏值"), store.load(14L, fp))
+        assertEquals("单个坏值不能整份作废", mapOf(0 to "坏值"), store.load(14L, fp).segments)
         store.clear(10L)
-        assertEquals(emptyMap<Int, String>(), store.load(10L, fp))
+        assertEquals(emptyMap<Int, String>(), store.load(10L, fp).segments)
         dir.deleteRecursively()
     }
 
@@ -313,6 +326,84 @@ class LongTextPipelineTest {
         assertTrue(plan.size <= pipeline.maxChunks || plan.chunkCapExceeded)
         assertTrue(pipeline.chunkTargetTokens <= pipeline.maxChunkTokens)
         plan.chunks.forEach { assertTrue(Tokens.estimate(it.text) <= pipeline.maxChunkTokens) }
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `归并断点续跑时不再重打已汇总的组`() {
+        val (store, dir) = tempStore()
+        val content = lecture(40000)
+        // 第一次跑让定稿失败：逐段与归并的成果都已在断点里，进程/接口中断就是这么留下的现场
+        val p1 = LongTextPipeline(FakeLLM(outlineUnits = 80, failFinal = true), store, contextWindow = 8192)
+        try {
+            runBlocking { p1.run(30L, content, "标题", true) }
+            assertTrue("应让定稿失败", false)
+        } catch (_: Exception) {
+        }
+        assertTrue("定稿失败不能清断点", File(dir, "segments-30.json").exists())
+
+        val second = FakeLLM(outlineUnits = 80)
+        val r2 = runBlocking { LongTextPipeline(second, store, contextWindow = 8192).run(30L, content, "标题", true) }
+
+        assertEquals("所有段都该复用断点", 0, r2.stats.segmentCalls)
+        assertEquals("所有归并组都该复用断点，不再重打", 0, second.mergeCalls)
+        assertTrue("要报告复用了多少组：${r2.stats.reusedMergeGroups}", r2.stats.reusedMergeGroups > 0)
+        assertEquals("只剩最终一次生成", 1, r2.stats.finalCalls)
+        assertTrue(TreeText.parse(r2.mapText).isNotEmpty())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `定稿输出预算随大纲体量抬升 小纲维持默认`() {
+        val (store, dir) = tempStore()
+        // 每段大纲约 880 token、9 段共约 8000：装得下窗口，输出预算应从 2048 抬到大纲的六成左右
+        val big = FakeLLM(outlineUnits = 80)
+        runBlocking { LongTextPipeline(big, store, contextWindow = 16384).run(31L, lecture(40000), "标题", true) }
+        assertTrue("大纲要抬升输出预算：${big.outTokens.last()}", big.outTokens.last() in 3000..8192)
+
+        // 小大纲维持默认上限，不多花额度（窗口给足，避免被窗口钳制而不是维持默认）
+        val small = FakeLLM()
+        runBlocking { LongTextPipeline(small, store, contextWindow = 131_072).run(32L, lecture(40000), "标题", true) }
+        assertEquals("小纲维持 ${LongTextPipeline.FinalOutTokens}", LongTextPipeline.FinalOutTokens, small.outTokens.last())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `定稿前有一步优化拓展`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM()
+        val result = runBlocking { LongTextPipeline(fake, store, contextWindow = 16384).run(40L, lecture(40000), "标题", true) }
+
+        assertEquals("优化步恰好一次", 1, fake.refineCalls)
+        assertEquals(1, result.stats.refineCalls)
+        assertEquals("定稿仍是一次", 1, result.stats.finalCalls)
+        assertTrue(TreeText.parse(result.mapText).isNotEmpty())
+        assertTrue(result.thinking.contains("记忆叙述"))
+        assertNull("一切顺利不该有提示", result.notice())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `优化步失败时按原大纲定稿不丢内容`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM(failRefine = true)
+        val result = runBlocking { LongTextPipeline(fake, store, contextWindow = 16384).run(41L, lecture(40000), "标题", true) }
+
+        assertEquals(1, fake.refineCalls)
+        assertTrue("优化失败也要出图", TreeText.parse(result.mapText).isNotEmpty())
+        assertTrue("优化失败不该惊动用户：${result.notice()}", result.notice() == null)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `小窗口装不下优化步时直接跳过`() {
+        val (store, dir) = tempStore()
+        val fake = FakeLLM()
+        val result = runBlocking { LongTextPipeline(fake, store, contextWindow = 4000).run(42L, lecture(20000), "标题", true) }
+
+        assertEquals("装不下就不打这一趟", 0, fake.refineCalls)
+        assertTrue("仍要出图", TreeText.parse(result.mapText).isNotEmpty())
+        fake.inputs.forEach { assertTrue("跳过优化后输入仍都在窗口内：$it", it <= 4000) }
         dir.deleteRecursively()
     }
 }

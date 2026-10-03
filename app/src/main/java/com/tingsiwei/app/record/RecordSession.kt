@@ -5,6 +5,7 @@ import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
+import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.transcribe.SystemSpeechRecognizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -135,6 +136,8 @@ object RecordSession {
                         content = content,
                     )
                 )
+                // 离开录音页后处理也要继续：交给 App 级协程，进详情页只是看进度
+                NoteProcessor.start(id, NoteProcessor.Kind.TRANSCRIBE)
                 saved.emit(id)
             } catch (e: Exception) {
                 error.value = "录音保存失败：${e.message}"

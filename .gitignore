@@ -10,3 +10,7 @@ replay_pid*.log
 .DS_Store
 captures/
 .externalNativeBuild/
+
+# 签名密钥与密码，只留在本机
+tingsiwei-release.jks
+keystore.properties

@@ -69,7 +69,7 @@ import com.tingsiwei.app.data.db.VersionEntity
 import com.tingsiwei.app.export.Exporter
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
-import com.tingsiwei.app.transcribe.Transcriber
+import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.ui.components.MapController
 import com.tingsiwei.app.ui.components.MindMapPanel
@@ -79,6 +79,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,13 +90,21 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     val vm: DetailViewModel = viewModel(key = "note$noteId", factory = detailVmFactory(noteId))
     val note by vm.note.collectAsState(initial = null)
     val versions by vm.versions.collectAsState(initial = emptyList())
-    val busyStage by vm.busyStage.collectAsState()
+    val busyStage by vm.busyStage.collectAsState(initial = null)
 
     var tab by remember { mutableIntStateOf(0) }
     var showVersions by remember { mutableStateOf(false) }
-    var suggestion by remember { mutableStateOf("") }
+    val suggestion by vm.suggestion.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    val ttsMsg by vm.ttsMessage.collectAsState()
 
     LaunchedEffect(note?.id, note?.status) { vm.maybeRunPipeline() }
+    LaunchedEffect(ttsMsg) {
+        ttsMsg?.let {
+            snackbar.showSnackbar(it)
+            vm.ttsMessage.value = null
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -117,7 +126,7 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 },
             )
         },
-        snackbarHost = { SnackbarHost(remember { SnackbarHostState() }) },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         val n = note
         Column(modifier = Modifier.padding(pad).fillMaxSize()) {
@@ -210,7 +219,7 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 ) {
                     OutlinedTextField(
                         value = suggestion,
-                        onValueChange = { suggestion = it },
+                        onValueChange = { vm.suggestion.value = it },
                         modifier = Modifier.weight(1f).height(72.dp),
                         placeholder = {
                             Text(
@@ -225,10 +234,8 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                     Button(
                         onClick = {
                             val s = suggestion.trim()
-                            if (s.isNotEmpty()) {
-                                suggestion = ""
-                                vm.sendSuggestion(s)
-                            }
+                            // 不清空输入：改图成功后由 ViewModel 清掉；失败了建议还留在框里，可直接重发
+                            if (s.isNotEmpty()) vm.sendSuggestion(s)
                         },
                         enabled = n?.mapJson != null && busyStage == null,
                     ) {
@@ -351,21 +358,26 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
     val rate by vm.ttsRate.collectAsState()
     Column(modifier.fillMaxSize().padding(16.dp)) {
         val thinking = n.thinking
-        if (thinking.isNullOrBlank()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(if (n.status == NoteStatus.GENERATING) "正在生成…" else "还没有思路")
-            }
-        } else {
-            SelectionContainer {
+        // 占位提示只占剩余空间：朗读按钮必须始终留在屏幕里，思路还没生成时也知道去哪按
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            if (thinking.isNullOrBlank()) {
                 Text(
-                    thinking,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    if (n.status == NoteStatus.GENERATING) "正在生成…" else "还没有思路\n生成完成后，点下面的按钮就能朗读",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            } else {
+                SelectionContainer {
+                    Text(
+                        thinking,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    )
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = { vm.toggleTts() }) {
+            Button(onClick = { vm.toggleTts() }, enabled = !thinking.isNullOrBlank()) {
                 Icon(if (speaking) Icons.Filled.Stop else Icons.Filled.PlayArrow, null)
                 Spacer(Modifier.width(4.dp))
                 Text(if (speaking) "停止" else "朗读思路")
@@ -444,9 +456,10 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
     val versions: Flow<List<VersionEntity>> =
         if (noteId <= 0L) flowOf(emptyList()) else db.versionDao().observeForNote(noteId)
 
-    val busyStage = MutableStateFlow<String?>(null)
-    /** 当前转写/生成/修改任务；防止状态变化触发的自动续跑和手动操作重复执行 */
-    private var pipelineJob: Job? = null
+    private val localStage = MutableStateFlow<String?>(null)
+
+    /** 阶段文案：转写/生成来自 App 级 NoteProcessor（离开页面也在跑），本地小任务（恢复版本）就地补充 */
+    val busyStage: Flow<String?> = combine(NoteProcessor.stageFlow(noteId), localStage) { p, l -> l ?: p }
 
     // 播放器
     private var player: MediaPlayer? = null
@@ -456,40 +469,44 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
     private var playerJob: Job? = null
 
     // TTS
-    private val tts by lazy { TtsPlayer(App.get()) }
+    private val tts by lazy { TtsPlayer(App.get()) { msg -> ttsMessage.value = msg } }
     val ttsSpeaking = MutableStateFlow(false)
     val ttsRate = MutableStateFlow(1.0f)
+    /** TtsPlayer 的可见提示（如"离线模型未下载，先用系统语音"），UI 弹 Snackbar */
+    val ttsMessage = MutableStateFlow<String?>(null)
+
+    /** AI 建议输入框内容：放 ViewModel 是为了改图失败后建议不丢，成功才清空 */
+    val suggestion = MutableStateFlow("")
+    private var reviseAwaitingResult = false
 
     init {
         viewModelScope.launch { ttsRate.value = settingsRepo.current().ttsRate }
-    }
-
-    private fun startPipeline(block: suspend () -> Unit) {
-        if (pipelineJob?.isActive == true) return
-        pipelineJob = viewModelScope.launch { block() }
+        // 导入时就已知时长，让播放器一开始就显示出来（首次 prepare 后用真实时长覆盖）
+        viewModelScope.launch {
+            db.noteDao().byId(noteId)?.let { n ->
+                if (n.durationMs > 0) playDurationMs.value = n.durationMs
+            }
+        }
+        viewModelScope.launch {
+            note.collect { n ->
+                if (!reviseAwaitingResult) return@collect
+                when (n?.status) {
+                    // 改图成功：输入框已完成使命，清掉
+                    NoteStatus.READY -> {
+                        reviseAwaitingResult = false
+                        suggestion.value = ""
+                    }
+                    // 改图失败：建议留在框里，用户可以直接改字重发，不用重新打一份
+                    NoteStatus.ERROR -> reviseAwaitingResult = false
+                    else -> {}
+                }
+            }
+        }
     }
 
     /** 笔记有未完成流程时自动续跑（含进程被杀后的恢复） */
     fun maybeRunPipeline() {
-        if (noteId <= 0L) return
-        viewModelScope.launch {
-            if (pipelineJob?.isActive == true) return@launch
-            val n = db.noteDao().byId(noteId) ?: return@launch
-            when {
-                n.status == NoteStatus.TRANSCRIBING && n.content.isNullOrBlank() && n.audioPath != null ->
-                    startPipeline { transcribe() }
-                n.status == NoteStatus.DRAFT ->
-                    startPipeline { generateInternal() }
-                // 生成中途被打断且没有结果：重新生成
-                n.status == NoteStatus.GENERATING && n.mapJson.isNullOrBlank() ->
-                    startPipeline { generateInternal() }
-                // 修改中途被打断但旧导图完好：旧导图没有丢，直接恢复可用
-                n.status == NoteStatus.GENERATING ->
-                    db.noteDao().update(
-                        n.copy(status = NoteStatus.READY, errorMsg = null, updatedAt = System.currentTimeMillis())
-                    )
-            }
-        }
+        viewModelScope.launch { NoteProcessor.maybeRun(noteId) }
     }
 
     fun retry() {
@@ -502,63 +519,20 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
                         n.copy(status = NoteStatus.READY, errorMsg = null, updatedAt = System.currentTimeMillis())
                     )
                 // generate() 覆盖前会自动存版本快照，所以重生成不会弄丢手动整理的导图（时钟图标里可回退）
-                n.content.isNullOrBlank() && n.audioPath != null -> startPipeline { transcribe() }
-                else -> startPipeline { generateInternal() }
+                n.content.isNullOrBlank() && n.audioPath != null ->
+                    NoteProcessor.start(noteId, NoteProcessor.Kind.TRANSCRIBE)
+                else -> NoteProcessor.start(noteId, NoteProcessor.Kind.GENERATE)
             }
-        }
-    }
-
-    private suspend fun transcribe() {
-        val dao = db.noteDao()
-        val n = dao.byId(noteId) ?: return
-        val audio = n.audioPath ?: return
-        dao.update(n.copy(status = NoteStatus.TRANSCRIBING, errorMsg = null, updatedAt = System.currentTimeMillis()))
-        busyStage.value = "正在解码音频…"
-        try {
-            val text = Transcriber.transcribeOffline(App.get(), audio) { _, msg ->
-                busyStage.value = msg
-            }
-            if (text.isBlank()) {
-                throw IllegalStateException("没有识别到内容，请检查录音质量；也可到设置里改用「手机自带识别」重新录一次")
-            }
-            dao.update(n.copy(content = text, status = NoteStatus.DRAFT, updatedAt = System.currentTimeMillis()))
-            generateInternal()
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            dao.update(
-                n.copy(
-                    status = NoteStatus.ERROR,
-                    errorMsg = e.message ?: "转写失败",
-                    updatedAt = System.currentTimeMillis(),
-                )
-            )
-            busyStage.value = null
         }
     }
 
     fun generate() {
-        if (noteId <= 0L) return
-        startPipeline { generateInternal() }
-    }
-
-    private suspend fun generateInternal() {
-        busyStage.value = "正在生成导图…"
-        try {
-            Generator(db, settingsRepo).generate(noteId) { busyStage.value = it }
-        } finally {
-            busyStage.value = null
-        }
+        NoteProcessor.start(noteId, NoteProcessor.Kind.GENERATE)
     }
 
     fun sendSuggestion(text: String) {
-        startPipeline {
-            busyStage.value = "正在按你的要求修改…"
-            try {
-                Generator(db, settingsRepo).revise(noteId, text) { busyStage.value = it }
-            } finally {
-                busyStage.value = null
-            }
-        }
+        // 只有真正起跑才算"等待结果"；渠道忙导致没起跑时输入框原样保留
+        if (NoteProcessor.start(noteId, NoteProcessor.Kind.REVISE, text)) reviseAwaitingResult = true
     }
 
     /** 拖动/编辑导图后保存（只在 READY 状态写库，避免和 AI 生成互相覆盖） */
@@ -573,11 +547,14 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
 
     fun restore(versionId: Long) {
         // 转写/生成进行中不能改版本：在飞的那次写库用的是开跑前的快照，会把恢复结果覆盖掉
-        if (pipelineJob?.isActive == true) return
+        if (NoteProcessor.isBusy(noteId)) return
         viewModelScope.launch {
-            busyStage.value = "正在恢复版本…"
-            Generator(db, settingsRepo).restoreVersion(noteId, versionId)
-            busyStage.value = null
+            localStage.value = "正在恢复版本…"
+            try {
+                Generator(db, settingsRepo).restoreVersion(noteId, versionId)
+            } finally {
+                localStage.value = null
+            }
         }
     }
 
@@ -651,11 +628,19 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         viewModelScope.launch {
             val n = db.noteDao().byId(noteId) ?: return@launch
             val thinking = n.thinking ?: return@launch
+            toggleTtsText(thinking)
+        }
+    }
+
+    /** 思路 / 原文共用一个播放器：正在读时就停，否则读传入的文本 */
+    fun toggleTtsText(text: String) {
+        viewModelScope.launch {
             if (tts.isSpeaking) {
                 tts.stop()
                 ttsSpeaking.value = false
             } else {
-                tts.speak(thinking, ttsRate.value)
+                val engine = settingsRepo.current().ttsEngine
+                tts.speak(text, ttsRate.value, engine)
                 ttsSpeaking.value = true
                 while (tts.isSpeaking) delay(300)
                 ttsSpeaking.value = false
@@ -665,6 +650,8 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
 
     fun setTtsRate(rate: Float) {
         ttsRate.value = rate
+        // 朗读中拖动调速条也要立刻生效，而不是只存起来下次朗读再用
+        tts.updateRate(rate)
         viewModelScope.launch { settingsRepo.setTtsRate(rate) }
     }
 

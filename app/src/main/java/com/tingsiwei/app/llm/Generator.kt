@@ -226,6 +226,7 @@ class Generator(
      * 起草思路（只读懂原文）→ 自查优化并按需拓展（拓展句标「（拓展）」）→ 只按定稿思路出导图。
      * 思路定稿后导图不再重写思路，图文天然一致。一次成稿退居兜底：
      * 窗口装不下三段、或起草就失败，都退回老路径；优化或出图失败则带着已有成果继续退，不推倒重来。
+     * 三段式至少 3 次串行调用，受「思路精修」开关控制（默认关=一次成稿，1 次调用，快约 3 倍）。
      */
     private suspend fun stagedOrDirect(
         cfg: com.tingsiwei.app.data.AppSettings,
@@ -233,6 +234,7 @@ class Generator(
         title: String,
         onStage: suspend (String) -> Unit,
     ): Outcome {
+        if (!cfg.llmStagedThinking) return directGenerate(cfg, content)
         val window = LlmPolicy.windowFor(cfg.llmContextWindow, cfg.llmConservative).coerceAtLeast(1024)
         if (!StagedFlow.fits(window, Tokens.estimate(content))) return directGenerate(cfg, content)
         return try {

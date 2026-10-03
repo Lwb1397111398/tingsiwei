@@ -59,6 +59,7 @@ import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.llm.SegmentStore
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
+import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +85,7 @@ fun HomeScreen(
     val notes by vm.notes.collectAsState()
     val query by vm.query.collectAsState()
     val message by vm.message.collectAsState()
+    val stages by NoteProcessor.stages.collectAsState()
     val snackbar = remember { SnackbarHostState() }
 
     var fabOpen by remember { mutableStateOf(false) }
@@ -163,6 +165,7 @@ fun HomeScreen(
                         val note = notes[i]
                         NoteCard(
                             note = note,
+                            stage = stages[note.id],
                             onClick = { onOpenNote(note.id) },
                             onLongClick = { pendingDelete = note },
                         )
@@ -190,7 +193,7 @@ fun HomeScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NoteEntity, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteCard(note: NoteEntity, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -225,6 +228,15 @@ private fun NoteCard(note: NoteEntity, onClick: () -> Unit, onLongClick: () -> U
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            if (stage != null && (note.status == NoteStatus.TRANSCRIBING || note.status == NoteStatus.GENERATING)) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
             }
         }
     }
@@ -261,6 +273,8 @@ class HomeViewModel : ViewModel() {
 
     fun delete(note: NoteEntity) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 还在转写/生成的笔记先停掉任务，避免它继续往已删除的笔记上写
+            NoteProcessor.cancel(note.id)
             note.audioPath?.let { path ->
                 try {
                     File(path).delete()
@@ -313,7 +327,9 @@ class HomeViewModel : ViewModel() {
                         durationMs = durationMs,
                     )
                 )
-                message.value = "导入成功！打开这条笔记就会开始转写并生成导图"
+                // 导入即开跑：不必再要求用户点开一次笔记（App 级协程，离开页面也不会断）
+                NoteProcessor.start(id, NoteProcessor.Kind.TRANSCRIBE)
+                message.value = "导入成功！已开始转写并生成导图，点开笔记可看进度"
             } catch (e: Exception) {
                 message.value = "导入失败：${e.message}"
             }

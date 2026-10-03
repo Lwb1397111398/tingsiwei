@@ -2,6 +2,8 @@ package com.tingsiwei.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,8 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,22 +43,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.SettingsRepository
+import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
 import com.tingsiwei.app.llm.LlmPolicy
 import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
+import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val vm: SettingsViewModel = viewModel()
@@ -67,7 +71,11 @@ fun SettingsScreen(onBack: () -> Unit) {
     val models by vm.models.collectAsState()
     val transcribeMode by vm.transcribeMode.collectAsState()
     val allowExpand by vm.allowExpand.collectAsState()
+    val stagedThinking by vm.stagedThinking.collectAsState()
     val ttsRate by vm.ttsRate.collectAsState()
+    val ttsEngine by vm.ttsEngine.collectAsState()
+    val ttsModelState by vm.ttsModelState.collectAsState()
+    val previewSpeaking by vm.previewSpeaking.collectAsState()
     val contextWindow by vm.contextWindow.collectAsState()
     val minIntervalMs by vm.minIntervalMs.collectAsState()
     val conservative by vm.conservative.collectAsState()
@@ -75,7 +83,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val message by vm.message.collectAsState()
     val busy by vm.busy.collectAsState()
 
-    var modelsOpen by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(message) {
@@ -84,7 +92,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             vm.message.value = null
         }
     }
-    LaunchedEffect(Unit) { vm.refreshModelState() }
+    LaunchedEffect(Unit) {
+        vm.refreshModelState()
+        vm.refreshTtsModelState()
+    }
 
     Scaffold(
         topBar = {
@@ -121,26 +132,26 @@ fun SettingsScreen(onBack: () -> Unit) {
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall,
                     )
-                    ExposedDropdownMenuBox(expanded = modelsOpen, onExpandedChange = { modelsOpen = it }) {
-                        OutlinedTextField(
-                            value = model,
-                            onValueChange = { vm.model.value = it },
-                            label = { Text("模型（可手填）") },
-                            modifier = Modifier.fillMaxWidth().menuAnchor(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        if (models.isNotEmpty()) {
-                            ExposedDropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
-                                models.forEach { m ->
-                                    DropdownMenuItem(
-                                        text = { Text(m, style = MaterialTheme.typography.bodySmall) },
-                                        onClick = {
-                                            vm.model.value = m
-                                            modelsOpen = false
-                                        },
-                                    )
-                                }
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { vm.model.value = it },
+                        label = { Text("模型（可手填）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                    )
+                    if (models.isNotEmpty()) {
+                        // 拉取到的模型直接平铺展示，点选即用；仍可手填
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            models.forEach { m ->
+                                FilterChip(
+                                    selected = model == m,
+                                    onClick = {
+                                        vm.model.value = m
+                                        keyboard?.hide()
+                                    },
+                                    label = { Text(m, style = MaterialTheme.typography.bodySmall) },
+                                )
                             }
                         }
                     }
@@ -218,6 +229,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                             )
                         }
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = stagedThinking, onCheckedChange = { vm.setStagedThinking(it) })
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("思路精修（更慢）", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "默认关：AI 一次读完成稿，速度最快。开启后先起草思路、再自查优化、最后按思路出图，" +
+                                    "图文更一致、拓展标注更准，但要多等约 2 次请求的时间",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -227,7 +251,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text("长录音与限流", style = MaterialTheme.typography.titleSmall)
                     Text(
                         "接口返回 429（限流）时会自动等待重试，已提炼的段落会保留，可从断点继续。" +
-                            "长录音总是失败就把节奏放慢、窗口调小。",
+                            "输出上限会在被截断时自动抬高重试，一般不用管。长录音总是失败就把节奏放慢、窗口调小。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -238,13 +262,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                             else TextButton(onClick = { vm.setMinInterval(ms) }) { Text(label) }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column {
                         Text("上下文窗口", style = MaterialTheme.typography.bodyMedium)
-                        listOf(4096, 8192, 16384, 32768).forEach { n ->
-                            val label = "${n / 1024}k"
-                            if (contextWindow == n) Button(onClick = {}) { Text(label) }
-                            else TextButton(onClick = { vm.setContextWindow(n) }) { Text(label) }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(8192, 16384, 32768, 65536, 131072, 262144).forEach { n ->
+                                val label = "${n / 1024}k"
+                                if (contextWindow == n) Button(onClick = {}) { Text(label) }
+                                else TextButton(onClick = { vm.setContextWindow(n) }) { Text(label) }
+                            }
                         }
+                        Text(
+                            "决定长内容怎么切分与单次请求的预算。大模型（尤其推理模型，思维链也占输出）建议 128k 起步；限流严重的渠道再调小",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = conservative, onCheckedChange = { vm.setConservative(it) })
@@ -264,8 +295,15 @@ fun SettingsScreen(onBack: () -> Unit) {
             // ---- 朗读 ----
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("朗读语速", style = MaterialTheme.typography.titleSmall)
+                    Text("朗读", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "朗读入口在笔记详情页「思路」标签底部：点开笔记 → 切到「思路」 → 点「朗读思路」。朗读中拖动下面的语速条立刻生效",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("语速", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.width(12.dp))
                         Slider(
                             value = ttsRate,
                             onValueChange = { vm.setTtsRate(it) },
@@ -273,6 +311,53 @@ fun SettingsScreen(onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         Text("%.1fx".format(ttsRate), style = MaterialTheme.typography.labelMedium)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = ttsEngine == TtsEngine.SYSTEM,
+                            onClick = { vm.setTtsEngine(TtsEngine.SYSTEM) },
+                        )
+                        Text("系统语音（手机自带，无需下载）", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = ttsEngine == TtsEngine.LOCAL,
+                            onClick = { vm.setTtsEngine(TtsEngine.LOCAL) },
+                        )
+                        Text("离线朗读模型（离线可用，约 215MB）", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (ttsEngine == TtsEngine.LOCAL) {
+                        val (stateText, ready) = when (ttsModelState.state) {
+                            TtsModelState.READY -> "已下载（${Formatters.fileSize(ttsModelState.bytes)}）" to true
+                            TtsModelState.DOWNLOADING -> "下载中 ${(ttsModelState.progress * 100).toInt()}%（${Formatters.fileSize(ttsModelState.downloaded)} / ${Formatters.fileSize(ttsModelState.total)}）" to false
+                            else -> if (ttsModelState.downloaded > 0) {
+                                "已下载 ${Formatters.fileSize(ttsModelState.downloaded)}，点下载继续" to false
+                            } else {
+                                "未下载（约 215MB，一次性下载）" to false
+                            }
+                        }
+                        Text("kokoro 中英模型（v1.1 int8）：$stateText", style = MaterialTheme.typography.bodySmall)
+                        if (ttsModelState.state == TtsModelState.DOWNLOADING) {
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { ttsModelState.progress.toFloat() },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!ready) {
+                                Button(
+                                    onClick = { vm.downloadTtsModel() },
+                                    enabled = ttsModelState.state != TtsModelState.DOWNLOADING,
+                                ) {
+                                    Text(if (ttsModelState.state == TtsModelState.DOWNLOADING) "下载中…" else "下载模型")
+                                }
+                            } else {
+                                TextButton(onClick = { vm.deleteTtsModel() }) { Text("删除模型") }
+                            }
+                        }
+                    }
+                    OutlinedButton(onClick = { vm.togglePreview() }) {
+                        Text(if (previewSpeaking) "停止试听" else "试听当前引擎")
                     }
                 }
             }
@@ -291,6 +376,16 @@ data class ModelStateUi(
     val progress: Float = 0f,
 )
 
+enum class TtsModelState { UNKNOWN, READY, DOWNLOADING, NOT_DOWNLOADED }
+
+data class TtsModelStateUi(
+    val state: TtsModelState = TtsModelState.UNKNOWN,
+    val bytes: Long = 0,
+    val downloaded: Long = 0,
+    val total: Long = ModelManager.TTS_TOTAL_BYTES,
+    val progress: Float = 0f,
+)
+
 class SettingsViewModel : ViewModel() {
 
     private val repo: SettingsRepository = App.get().settings
@@ -303,7 +398,11 @@ class SettingsViewModel : ViewModel() {
     val models = MutableStateFlow<List<String>>(emptyList())
     val transcribeMode = MutableStateFlow(TranscribeMode.OFFLINE)
     val allowExpand = MutableStateFlow(true)
+    val stagedThinking = MutableStateFlow(false)
     val ttsRate = MutableStateFlow(1.0f)
+    val ttsEngine = MutableStateFlow(TtsEngine.SYSTEM)
+    val ttsModelState = MutableStateFlow(TtsModelStateUi())
+    val previewSpeaking = MutableStateFlow(false)
     val contextWindow = MutableStateFlow(LlmPolicy.DEFAULT_CONTEXT_WINDOW)
     val minIntervalMs = MutableStateFlow(LlmPolicy.DEFAULT_MIN_INTERVAL_MS)
     val conservative = MutableStateFlow(false)
@@ -319,7 +418,9 @@ class SettingsViewModel : ViewModel() {
             model.value = s.llmModel
             transcribeMode.value = s.transcribeMode
             allowExpand.value = s.allowExpand
+            stagedThinking.value = s.llmStagedThinking
             ttsRate.value = s.ttsRate
+            ttsEngine.value = s.ttsEngine
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
@@ -360,7 +461,7 @@ class SettingsViewModel : ViewModel() {
                 repo.setLlm(url.value, key.value, model.value)
                 val list = client.listModels(url.value, key.value)
                 models.value = list
-                message.value = if (list.isEmpty()) "没有获取到模型，可手动填写模型名" else "获取到 ${list.size} 个模型"
+                message.value = if (list.isEmpty()) "没有获取到模型，可手动填写模型名" else "获取到 ${list.size} 个模型，已在下方列出，点选即可"
             } catch (e: Exception) {
                 message.value = e.message ?: "获取失败"
             } finally {
@@ -393,9 +494,93 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repo.setAllowExpand(flag) }
     }
 
+    fun setStagedThinking(flag: Boolean) {
+        stagedThinking.value = flag
+        viewModelScope.launch { repo.setLlmStagedThinking(flag) }
+    }
+
     fun setTtsRate(rate: Float) {
         ttsRate.value = rate
+        if (previewSpeaking.value) previewTts.updateRate(rate)
         viewModelScope.launch { repo.setTtsRate(rate) }
+    }
+
+    fun setTtsEngine(e: String) {
+        ttsEngine.value = e
+        viewModelScope.launch { repo.setTtsEngine(e) }
+    }
+
+    fun refreshTtsModelState() {
+        val ready = ModelManager.isTtsReady(context)
+        ttsModelState.value = if (ready) {
+            TtsModelStateUi(TtsModelState.READY, bytes = ModelManager.ttsDownloadedBytes(context))
+        } else {
+            val partial = ModelManager.ttsDownloadedBytes(context)
+            if (partial > 0) {
+                // 有残缺进度但没在下载：不算"下载中"，按钮可点续传
+                TtsModelStateUi(TtsModelState.NOT_DOWNLOADED, downloaded = partial, progress = partial.toFloat() / ModelManager.TTS_TOTAL_BYTES)
+            } else {
+                TtsModelStateUi(TtsModelState.NOT_DOWNLOADED)
+            }
+        }
+    }
+
+    fun downloadTtsModel() {
+        if (ttsModelState.value.state == TtsModelState.DOWNLOADING) return
+        viewModelScope.launch {
+            ttsModelState.value = TtsModelStateUi(
+                TtsModelState.DOWNLOADING,
+                downloaded = ModelManager.ttsDownloadedBytes(context),
+                progress = ModelManager.ttsDownloadedBytes(context).toFloat() / ModelManager.TTS_TOTAL_BYTES,
+            )
+            try {
+                ModelManager.downloadTtsModel(
+                    context,
+                    onFileStart = { i, count, rel ->
+                        // espeak 语音数据是一大串小文件，只报阶段，免得进度提示刷屏
+                        message.value = when {
+                            rel.startsWith("espeak-ng-data/") ->
+                                "下载语音数据（${i + 1}/$count）…"
+                            else -> "下载 ${i + 1}/$count：$rel"
+                        }
+                    },
+                    onProgress = { done, total ->
+                        ttsModelState.value = ttsModelState.value.copy(
+                            downloaded = done,
+                            total = total,
+                            progress = if (total > 0) done.toFloat() / total else 0f,
+                        )
+                    },
+                )
+                message.value = "离线朗读模型下载完成"
+            } catch (e: Exception) {
+                message.value = "下载失败：${e.message}（已下载部分保留，再点一次继续）"
+            } finally {
+                refreshTtsModelState()
+            }
+        }
+    }
+
+    fun deleteTtsModel() {
+        ModelManager.deleteTtsModel(context)
+        refreshTtsModelState()
+        message.value = "已删除离线朗读模型"
+    }
+
+    private val previewTts by lazy { TtsPlayer(context) { msg -> message.value = msg } }
+
+    fun togglePreview() {
+        if (previewSpeaking.value) {
+            previewTts.stop()
+            previewSpeaking.value = false
+            return
+        }
+        viewModelScope.launch {
+            previewTts.speak("你好，这是听的思维的朗读试听。一二三四五，上山打老虎。", ttsRate.value, ttsEngine.value)
+            previewSpeaking.value = true
+            while (previewTts.isSpeaking) kotlinx.coroutines.delay(300)
+            previewSpeaking.value = false
+        }
     }
 
     fun setMinInterval(ms: Long) {

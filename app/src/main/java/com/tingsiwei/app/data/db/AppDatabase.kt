@@ -23,6 +23,9 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE id = :id")
     fun observeById(id: Long): Flow<NoteEntity?>
 
+    @Query("SELECT * FROM notes WHERE status IN (:statuses)")
+    suspend fun byStatuses(statuses: List<String>): List<NoteEntity>
+
     @Query("SELECT * FROM notes WHERE title LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%' ORDER BY updatedAt DESC")
     fun search(q: String): Flow<List<NoteEntity>>
 
