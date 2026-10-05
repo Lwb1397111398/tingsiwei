@@ -28,7 +28,7 @@
 | 离线识别 | `transcribe/SherpaTranscriber.kt`、`transcribe/Transcriber.kt` | sherpa-onnx AAR(`app/libs/sherpa-onnx-1.13.8.aar`) + SenseVoice int8 中文模型；**`OfflineRecognizer` 逐块整段解码**（非流式，`SherpaTranscriber.kt:17`），块间拼接并回报进度 | [离线识别模块总览.md](离线识别模块总览.md) |
 | 模型下载 | `transcribe/ModelManager.kt` | 双组离线模型统一走 hf-mirror、`.part` 断点续传、共 5 次尝试线性退避（1.5/3/4.5/6s）：ASR `model.int8.onnx`（`MODEL_BYTES = 237_115_547` ≈ 226 MiB）+ `tokens.txt`；v1.5.0 起 TTS kokoro 清单 373 个文件（`TTS_TOTAL_BYTES = 215_308_902` ≈ 215 MB，每文件声明的字节数兼作完整性下限）；启动时 `cleanupLegacyTts` 删旧 melo 目录 | [模型下载模块总览.md](模型下载模块总览.md) |
 | 系统识别 | `transcribe/SystemSpeechRecognizer.kt` | 边录边转，会话中断自动重启续接 | [系统识别模块总览.md](系统识别模块总览.md) |
-| 转写模式选择 | `data/SettingsRepository.kt`（`TranscribeMode` 定义在此，不在 `transcribe/`）+ 调用侧 | OFFLINE / SYSTEM 双模式，**默认 OFFLINE**（`SettingsRepository.kt:76`/`:105` 两处读盘默认、`RecordSession.kt:35` 内存初值，设置页选中态 `SettingsScreen.kt:179`），设置页可切 | [转写模式选择模块总览.md](转写模式选择模块总览.md) |
+| 转写模式选择 | `data/SettingsRepository.kt`（`TranscribeMode` 定义在此，不在 `transcribe/`）+ 调用侧 | OFFLINE / SYSTEM 双模式，**默认 OFFLINE**（`SettingsRepository.kt:88`/`:120` 两处读盘默认、`RecordSession.kt:35` 内存初值，设置页选中态 `SettingsScreen.kt:180`），设置页可切 | [转写模式选择模块总览.md](转写模式选择模块总览.md) |
 | TTS 朗读 | `tts/TtsPlayer.kt`、`tts/SherpaTts.kt`、`tts/TtsChunkCallback.java` | 双引擎朗读「思路」：系统 TextToSpeech + sherpa-onnx kokoro 离线模型（未下载自动回落系统），长文按句切块（每块 ≤120 字），朗读中可随时调速（滑杆 0.5~2.0x，区间钳制在 UI 侧） | [TTS朗读模块总览.md](TTS朗读模块总览.md) |
 | 导出 | `export/Exporter.kt` | Markdown（导图+思路+原文）、FileProvider 分享 | [导出模块总览.md](导出模块总览.md) |
 | 通用工具 | `util/Formatters.kt` | 时长/体积/时间等格式化，被各页面共用 | [通用工具模块总览.md](通用工具模块总览.md) |
@@ -41,7 +41,7 @@
 4. **拖动防回环**：MindMapPanel 记录 `localJson`，自己拖动产生的数据不回推画布，只有外部变化（AI 重生成/恢复版本）才 setData。
 5. **saveMap 只在 READY 状态写库**，避免与生成流程互相覆盖。
 6. **构建路径必须纯英文**（AGP 拒绝中文路径）：项目真实位置 `C:\AIWorkSpace\tingsiwei-src`（老包内 `听的思维\源码工程\tingsiwei` 只是指向它的 junction；Gradle 会把路径 canonical 到真实位置，junction 救不了中文路径的构建/test worker）——2026-09-30 迁移落地，旧 `E:\engine\tingsiwei` 随 E 盘弃用。
-7. **UI 与 ViewModel 同文件**是本工程的既有写法（`HomeScreen.kt:264`、`RecordScreen.kt:190`、`SettingsScreen.kt:389`、`DetailScreen.kt:449+` 都是），不是失误；其中只有 `DetailScreen.kt` 承担跨模块业务编排，改动它要连带看流水线与导图两块的总览。
+7. **UI 与 ViewModel 同文件**是本工程的既有写法（`HomeScreen.kt:264`、`RecordScreen.kt:190`、`SettingsScreen.kt:447`、`DetailScreen.kt:449+` 都是），不是失误；其中只有 `DetailScreen.kt` 承担跨模块业务编排，改动它要连带看流水线与导图两块的总览。
 8. **发版自动化（2026-10-05）**：`versionCode = git rev-list --count HEAD`、versionName `1.5.N`，推 main 即由 GitHub Actions 构建签名包并发布到固定 `latest` Release；签名钥匙 debug/release 统一锁 `tingsiwei-release.jks`（jks 与口令不入 git，CI 经 Actions Secrets 还原），保证所有环境的包可互相覆盖安装。手机端检查更新的私有仓库令牌由用户自配（Fine-grained PAT，Contents:Read，明文存 DataStore 对齐 `llm_key` 水位）。
 
 ## 构建说明
@@ -82,7 +82,7 @@
 
 ## 最后更新
 
-2026-10-05 · 应用自更新模块上线：索引新增「应用自更新」行、设置页/数据层/入口行同步；设计决策 +1（提交数版本号 + 统一签名 + CI 自动发版）；构建说明按现状改写（JDK 走 JAVA_HOME、镜像按 CI 分流、自动发版链路、单测 167→177 例）。配套新总览《应用自更新模块总览.md》；入口与导航/设置页/数据层三份总览同批改写（含行号漂移规则声明）。
+2026-10-05 · 应用自更新模块上线：索引新增「应用自更新」行、设置页/数据层/入口行同步；设计决策 +1（提交数版本号 + 统一签名 + CI 自动发版）；构建说明按现状改写（JDK 走 JAVA_HOME、镜像按 CI 分流、自动发版链路、单测 167→177 例）。配套新总览《应用自更新模块总览.md》；入口与导航/设置页/数据层/转写模式选择四份总览同批改写。**行号漂移规则**（本轮代码插入导致）：`SettingsScreen.kt` 旧行号 47–363 → +1、≥364 → +58；`AndroidManifest.xml` 旧 ≥9 → +2；本索引「已知缺陷」节引用的 `SettingsScreen.kt:616/334-337/195/423/179` 尚未逐处换号，按规则换算（如 `:616`→`:674`），下次整篇重校统一处理；已直接换号的：设计决策 #7 `SettingsScreen.kt:447`、转写模式行 `:88`/`:120`/`:180`。
 
 2026-10-04 · 修正过期引用：设置页行补 v1.5.0 朗读卡（引擎选择/TTS 模型下载/试听）；转写模式行 OFFLINE 默认改为 `SettingsRepository.kt:76`/`:105` + `RecordSession.kt:35`；已知缺陷 #3 的行号按当前代码重核（`ModelManager.kt:25`、`SettingsScreen.kt:616`、续跑门槛 `:459-462`）；设计决策 #7 四处 ViewModel 行号重核；构建说明与设计决策 #6、坑节构建路径全部从 `E:\engine\*` 改为现役位置（`C:\AIWorkSpace\tingsiwei-src` + wrapper + 本机 JDK 17/SDK），并注明 junction 救不了中文路径。
 
