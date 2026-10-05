@@ -1,5 +1,14 @@
 import java.util.Properties
 
+// 应用自更新：版本号跟着 git 提交数走——每推一次 main 自动 +1；
+// 本机与 CI 对同一提交算出同一个号，手机端比较 versionCode 即可判断有无新版本
+val commitCount: Int = runCatching {
+    providers.exec {
+        workingDir(rootDir)
+        commandLine("git", "rev-list", "--count", "HEAD")
+    }.standardOutput.asText.get().trim().toInt()
+}.getOrDefault(1)
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,18 +25,21 @@ android {
         applicationId = "com.tingsiwei.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = commitCount
+        versionName = "1.5.$commitCount"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
     }
 
-    // 签名密码只留在本机 keystore.properties（已 gitignore）；文件缺失时留空，仅影响 release 打包
+    // 签名密码只留在本机 keystore.properties（已 gitignore）；CI 由 Actions Secrets 还原同名文件。
+    // 本机与 CI 用同一把 jks → 所有包的签名指纹一致，覆盖安装不需要卸载
     val keystoreProps = Properties().apply {
         val f = rootProject.file("keystore.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
+    val hasKeystore = rootProject.file("tingsiwei-release.jks").exists() &&
+        keystoreProps.getProperty("storePassword", "").isNotBlank()
 
     signingConfigs {
         create("release") {
@@ -42,6 +54,12 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")
         }
+        debug {
+            // debug 也锁同一把钥匙：手机上装的调试包能被 CI 的正式包直接覆盖升级，不报签名冲突
+            if (hasKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -52,6 +70,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // 应用自更新需要编译期写入 BuildConfig.VERSION_CODE/VERSION_NAME 与远端比较
+        buildConfig = true
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

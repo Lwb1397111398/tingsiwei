@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="shared" path="shared/" />
+    <!-- 应用自更新：只把下载更新包的缓存子目录开放给系统安装器 -->
+    <cache-path name="updates" path="updates/" />
     <files-path name="exports" path="exports/" />
 </paths>

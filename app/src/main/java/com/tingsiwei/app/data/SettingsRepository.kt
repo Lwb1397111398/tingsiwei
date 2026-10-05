@@ -46,6 +46,12 @@ data class AppSettings(
     val ttsEngine: String = TtsEngine.SYSTEM,
     /** 最近一次成功生成导图用的模型名；换模型后失败时用来提示用户切回去 */
     val lastGoodModel: String? = null,
+    /** 是否已保存 GitHub 只读令牌（应用自更新用；令牌明文不放进本对象，单独按需读取） */
+    val hasGithubToken: Boolean = false,
+    /** 启动时自动检查更新（24 小时节流） */
+    val updateAutoCheck: Boolean = true,
+    /** 隐藏配置：检查更新的 API 地址；留空走 GitHub 官方，测试时可指向假服务器 */
+    val updateApiBase: String = "",
 )
 
 class SettingsRepository(private val context: Context) {
@@ -63,6 +69,12 @@ class SettingsRepository(private val context: Context) {
         val llmStagedThinking = booleanPreferencesKey("llm_staged_thinking")
         val ttsEngine = stringPreferencesKey("tts_engine")
         val lastGoodModel = stringPreferencesKey("last_good_model")
+
+        // ---- 应用自更新 ----
+        val githubToken = stringPreferencesKey("github_token")
+        val updateAutoCheck = booleanPreferencesKey("update_auto_check")
+        val updateLastCheckedMs = longPreferencesKey("update_last_checked_ms")
+        val updateApiBase = stringPreferencesKey("update_api_base")
 
         /** 一次性迁移标记：旧版默认窗口 16k 对大模型/推理模型太小，升级后统一抬到新默认 */
         val windowMigrated = booleanPreferencesKey("llm_window_migrated_1_3")
@@ -82,6 +94,9 @@ class SettingsRepository(private val context: Context) {
             llmStagedThinking = p[K.llmStagedThinking] ?: false,
             ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
             lastGoodModel = p[K.lastGoodModel],
+            hasGithubToken = p[K.githubToken] != null,
+            updateAutoCheck = p[K.updateAutoCheck] != false,
+            updateApiBase = p[K.updateApiBase].orEmpty(),
         )
     }
 
@@ -111,6 +126,9 @@ class SettingsRepository(private val context: Context) {
             llmStagedThinking = p[K.llmStagedThinking] ?: false,
             ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
             lastGoodModel = p[K.lastGoodModel],
+            hasGithubToken = p[K.githubToken] != null,
+            updateAutoCheck = p[K.updateAutoCheck] != false,
+            updateApiBase = p[K.updateApiBase].orEmpty(),
         )
     }
 
@@ -153,6 +171,35 @@ class SettingsRepository(private val context: Context) {
     suspend fun setLastGoodModel(model: String) {
         context.dataStore.edit { it[K.lastGoodModel] = model }
     }
+
+    // ---- 应用自更新 ----
+
+    /**
+     * 保存 GitHub 只读令牌（Fine-grained PAT，Contents:Read，只用于查/下私有仓库的更新包）。
+     * 与 LLM key 同级明文存 DataStore，仅本机可读。
+     */
+    suspend fun saveGithubToken(plain: String) {
+        context.dataStore.edit { it[K.githubToken] = plain.trim() }
+    }
+
+    suspend fun clearGithubToken() {
+        context.dataStore.edit { it.remove(K.githubToken) }
+    }
+
+    /** 读取令牌明文；未配置返回 null。仅 UpdateViewModel 联网检查时调用 */
+    suspend fun githubTokenOrNull(): String? =
+        context.dataStore.data.first()[K.githubToken]?.takeIf { it.isNotBlank() }
+
+    suspend fun setUpdateAutoCheck(enabled: Boolean) {
+        context.dataStore.edit { it[K.updateAutoCheck] = enabled }
+    }
+
+    suspend fun markUpdateChecked() {
+        context.dataStore.edit { it[K.updateLastCheckedMs] = System.currentTimeMillis() }
+    }
+
+    suspend fun updateLastCheckedMs(): Long =
+        context.dataStore.data.first()[K.updateLastCheckedMs] ?: 0L
 
     companion object {
         const val MinContextWindow = 2048

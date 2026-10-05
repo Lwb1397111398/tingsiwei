@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -63,7 +64,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val vm: SettingsViewModel = viewModel()
     val url by vm.url.collectAsState()
     val key by vm.key.collectAsState()
@@ -358,6 +359,63 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                     OutlinedButton(onClick = { vm.togglePreview() }) {
                         Text(if (previewSpeaking) "停止试听" else "试听当前引擎")
+                    }
+                }
+            }
+
+            // ---- 应用更新（自更新：手机上直接升级，不用连电脑传 APK） ----
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("应用更新", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "当前版本 v${updateVm.currentVersion}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("自动检查更新", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "每天最多联网检查一次，发现新版本弹窗提醒",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = updateVm.autoCheck, onCheckedChange = { updateVm.changeAutoCheck(it) })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { updateVm.checkNow() },
+                            enabled = !updateVm.checking && !updateVm.downloading,
+                        ) { Text(if (updateVm.checking) "检查中…" else "检查更新") }
+                        TextButton(onClick = { updateVm.openGuide() }) { Text("如何获取令牌？") }
+                    }
+                    OutlinedTextField(
+                        value = updateVm.tokenInput,
+                        onValueChange = { updateVm.tokenInput = it },
+                        label = { Text("GitHub 访问令牌（私有仓库更新用）") },
+                        placeholder = { Text(if (updateVm.hasToken) "已保存（输入以更换）" else "github_pat_…") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            if (updateVm.hasToken) TextButton(onClick = { updateVm.clearToken() }) { Text("清除") }
+                        },
+                    )
+                    OutlinedButton(
+                        onClick = { updateVm.saveToken() },
+                        enabled = updateVm.tokenInput.isNotBlank(),
+                    ) { Text("保存令牌") }
+                    updateVm.status?.let {
+                        Text(
+                            it,
+                            color = if (updateVm.statusError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
