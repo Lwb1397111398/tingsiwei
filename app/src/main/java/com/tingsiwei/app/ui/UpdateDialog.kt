@@ -83,7 +83,8 @@ private fun TokenGuideDialog(vm: UpdateViewModel) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "「听的思维」的更新包放在私有仓库里，需要一把只读钥匙才能查新版本。\n" +
+                    "「听的思维」的更新检查默认**不需要**令牌（仓库已公开，匿名就能查和下载）。\n" +
+                        "只有两种情况才建议配一把：GitHub 提示请求限流、或日后仓库转回私有。\n" +
                         "用电脑或手机浏览器打开 github.com 并登录后：\n" +
                         "\n1. 点右上角头像 → Settings（设置）\n" +
                         "2. 左侧最底部 → Developer settings（开发者设置）\n" +
@@ -92,7 +93,7 @@ private fun TokenGuideDialog(vm: UpdateViewModel) {
                         "5. Permissions → Repository permissions → Contents 设为 Read-only\n" +
                         "6. Expiration 有效期选 1 年（到期后重新生成换一个即可）\n" +
                         "7. 点 Generate token，复制生成的一长串（github_pat_ 开头），回到设置页粘贴并点「保存令牌」\n" +
-                        "\n这个令牌只有「读取」权限，只用于下载更新包；换手机后需要重新填一次。",
+                        "\n这个令牌只有「读取」权限，只用于下载更新包；不配也完全不影响正常更新。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

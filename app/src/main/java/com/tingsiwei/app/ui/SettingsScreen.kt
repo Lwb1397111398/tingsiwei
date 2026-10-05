@@ -397,7 +397,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     OutlinedTextField(
                         value = updateVm.tokenInput,
                         onValueChange = { updateVm.tokenInput = it },
-                        label = { Text("GitHub 访问令牌（私有仓库更新用）") },
+                        label = { Text("GitHub 访问令牌（可选——仓库已公开，通常不用填）") },
                         placeholder = { Text(if (updateVm.hasToken) "已保存（输入以更换）" else "github_pat_…") },
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),

@@ -15,7 +15,7 @@
 | 详情页与生成编排 | `ui/DetailScreen.kt` | 三标签（导图/原文/思路）、版本快照、重试与续跑、朗读与导出——UI 与 `DetailViewModel` 同文件；转写/生成/改写已委托 `pipeline/NoteProcessor`，本页负责接线、兜底与版本界面 | [详情页与生成编排模块总览.md](详情页与生成编排模块总览.md) |
 | 笔记处理宿主 | `pipeline/NoteProcessor.kt` | App 级后台任务宿主：转写/生成/改写离开页面不中断、同笔记幂等互斥、`stages` 阶段进度流供详情页与首页徽章共用、App 启动续跑半路任务；转写完成自动接生成 | [笔记处理宿主模块总览.md](笔记处理宿主模块总览.md) |
 | 设置页 | `ui/SettingsScreen.kt` | LLM 接口/模型、离线 ASR 模型下载、转写方式、语速、思路精修开关、上下文窗口/请求间隔/保守模式、朗读引擎选择（系统/kokoro 离线）与 TTS 模型下载、试听、应用更新卡（检查/下载/安装+GitHub 令牌） | [设置页模块总览.md](设置页模块总览.md) |
-| 应用自更新 | `data/update/UpdateChecker.kt`、`UpdateInstaller.kt`、`ui/UpdateViewModel.kt`、`ui/UpdateDialog.kt`、`.github/workflows/build-release.yml` | 推 main → CI 自动构建签名包发布到 latest Release；App 检查版本（私有仓库带只读令牌、24h 静默节流）→ 弹窗 → 流式下载（`.part` 校验/同版本复用）→ FileProvider 唤起系统安装器覆盖安装；versionCode=git 提交数 | [应用自更新模块总览.md](应用自更新模块总览.md) |
+| 应用自更新 | `data/update/UpdateChecker.kt`、`UpdateInstaller.kt`、`ui/UpdateViewModel.kt`、`ui/UpdateDialog.kt`、`.github/workflows/build-release.yml` | 推 main → CI 自动构建签名包发布到 latest Release；App 匿名检查版本（24h 静默节流，令牌可选）、弹窗 → 流式下载（`.part` 校验/同版本复用）→ FileProvider 唤起系统安装器覆盖安装；versionCode=git 提交数 | [应用自更新模块总览.md](应用自更新模块总览.md) |
 | 数据层 | `data/db/`（Room：notes、versions 表，**version=1 未改动**）、`data/SettingsRepository.kt`（DataStore，13 键：基础 9 + 应用自更新 4） | 笔记、版本快照、应用设置 | [数据层模块总览.md](数据层模块总览.md) |
 | LLM 客户端与弹性层 | `llm/LlmClient.kt`、`llm/LlmSession.kt`、`llm/LlmPolicy.kt` | OpenAI 兼容：地址规范化（自动补 `/v1`）、`/models`、`/chat/completions`。**弹性层**：`Transport` 接缝（可注入假实现做 JVM 单测）、`LlmError` 分级（429/5xx/网络/超时/坏格式/空/截断）、`RateGate` 进程级节流闸（取号即放锁，退避不占位）、指数退避+抖动（认 `Retry-After`）、`Tokens` 预算（CJK 一字一 token，四级降级：压输出→缩 system→重算输出余量→截输入，绝不因"放不下"打断请求） | [LLM客户端与弹性层模块总览.md](LLM客户端与弹性层模块总览.md) |
 | 提示词 | `llm/Prompts.kt` | 生成/修改/分段提炼/分层归并/最终汇总 + 截断降级规则 | [提示词模块总览.md](提示词模块总览.md) |
@@ -42,7 +42,7 @@
 5. **saveMap 只在 READY 状态写库**，避免与生成流程互相覆盖。
 6. **构建路径必须纯英文**（AGP 拒绝中文路径）：项目真实位置 `C:\AIWorkSpace\tingsiwei-src`（老包内 `听的思维\源码工程\tingsiwei` 只是指向它的 junction；Gradle 会把路径 canonical 到真实位置，junction 救不了中文路径的构建/test worker）——2026-09-30 迁移落地，旧 `E:\engine\tingsiwei` 随 E 盘弃用。
 7. **UI 与 ViewModel 同文件**是本工程的既有写法（`HomeScreen.kt:264`、`RecordScreen.kt:190`、`SettingsScreen.kt:447`、`DetailScreen.kt:449+` 都是），不是失误；其中只有 `DetailScreen.kt` 承担跨模块业务编排，改动它要连带看流水线与导图两块的总览。
-8. **发版自动化（2026-10-05）**：`versionCode = git rev-list --count HEAD`、versionName `1.5.N`，推 main 即由 GitHub Actions 构建签名包并发布到固定 `latest` Release；签名钥匙 debug/release 统一锁 `tingsiwei-release.jks`（jks 与口令不入 git，CI 经 Actions Secrets 还原），保证所有环境的包可互相覆盖安装。手机端检查更新的私有仓库令牌由用户自配（Fine-grained PAT，Contents:Read，明文存 DataStore 对齐 `llm_key` 水位）。
+8. **发版自动化（2026-10-05）**：`versionCode = git rev-list --count HEAD`、versionName `1.5.N`，推 main 即由 GitHub Actions 构建签名包并发布到固定 `latest` Release；签名钥匙 debug/release 统一锁 `tingsiwei-release.jks`（jks 与口令不入 git，CI 经 Actions Secrets 还原），保证所有环境的包可互相覆盖安装。**仓库已转公开（2026-10-05）**：更新检查匿名可用、零配置；App 内令牌输入框保留为可选兜底。
 
 ## 构建说明
 

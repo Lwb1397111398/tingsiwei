@@ -175,7 +175,8 @@ class SettingsRepository(private val context: Context) {
     // ---- 应用自更新 ----
 
     /**
-     * 保存 GitHub 只读令牌（Fine-grained PAT，Contents:Read，只用于查/下私有仓库的更新包）。
+     * 保存 GitHub 只读令牌（Fine-grained PAT，Contents:Read）。
+     * 仓库已公开，令牌为可选项——仅提高 API 限流额度或仓库转回私有时才需要。
      * 与 LLM key 同级明文存 DataStore，仅本机可读。
      */
     suspend fun saveGithubToken(plain: String) {

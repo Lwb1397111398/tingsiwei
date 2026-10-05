@@ -35,7 +35,8 @@ class UpdateException(message: String, cause: Throwable? = null) : Exception(mes
  *
  * 约定：云端工作流每次构建发布时，把机器可读元数据写进发布说明第一行的 HTML 注释
  * `<!-- tingsiwei-update versionCode=20 versionName=1.5.20 -->`（GitHub 页面渲染时不可见），
- * 资产里第一个 .apk 就是安装包。仓库是私有的，查 Releases 必须带只读令牌，否则 API 返回 404。
+ * 资产里第一个 .apk 就是安装包。仓库已公开，匿名即可查询与下载；令牌为可选项，
+ * 仅在需要更高 API 限流额度（或日后仓库转回私有）时才配置。
  */
 object UpdateChecker {
 
@@ -154,12 +155,12 @@ object UpdateChecker {
     fun stripMetaComment(body: String): String =
         body.replace(Regex("""<!--\s*tingsiwei-update[^>]*-->"""), "").trim()
 
-    /** 人话版 404 提示：私有仓库没令牌、和真没发过版本，用户需要区分 */
+    /** 人话版 404 提示：公开仓库的 404 只可能是云端还没发布过版本；带令牌的提示顺带引导清理 */
     fun noReleaseMessage(token: String?): String =
         if (token.isNullOrBlank()) {
-            "获取更新失败：仓库未公开且未配置令牌。请在「GitHub 访问令牌」输入框填入只读令牌（点「如何获取令牌？」看步骤）"
+            "仓库还没有发布过任何版本（若刚推送过代码，请等一两分钟让云端构建完成再试）"
         } else {
-            "仓库还没有发布过任何版本（若仓库是私有的，请检查令牌是否有效）"
+            "仓库还没有发布过任何版本——若之前配置过令牌，可在「应用更新」里清除后再试（仓库已公开，无需令牌）"
         }
 
     /**

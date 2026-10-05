@@ -107,24 +107,24 @@ class UpdateCheckerTest {
     }
 
     @Test
-    fun `无令牌且 404 时提示需要配置令牌`() {
+    fun `无令牌且 404 时提示等待云端发布`() {
         fake.latestStatus = 404
         try {
             fetch(currentCode = 1, token = null)
             throw AssertionError("应当抛出 UpdateException")
         } catch (e: UpdateException) {
-            assertTrue(e.message!!.contains("令牌"))
+            assertTrue(e.message!!.contains("还没有发布过"))
         }
     }
 
     @Test
-    fun `有令牌但仓库没发布时提示没有版本`() {
+    fun `带令牌但仓库没发布时提示可清除令牌（仓库已公开无需令牌）`() {
         fake.latestStatus = 404
         try {
             fetch(currentCode = 1, token = "tok")
             throw AssertionError("应当抛出 UpdateException")
         } catch (e: UpdateException) {
-            assertTrue(e.message!!.contains("还没有发布过"))
+            assertTrue(e.message!!.contains("令牌"))
         }
     }
 
