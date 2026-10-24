@@ -1,0 +1,23 @@
+{
+ "acks": {
+  "应用自更新模块总览.md": {
+   "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
+    "sha1": "6fd5e959d9b97921e0f85c4bda3f510bd715aba1",
+    "note": "SettingsScreen.kt 本次只插了朗读卡的在线朗读表单（在应用更新卡之前），应用更新卡功能零改动，仅行号漂移",
+    "acked_at": "2026-10-24 11:32:55"
+   }
+  },
+  "转写模式选择模块总览.md": {
+   "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
+    "sha1": "448e5445872f71580c40e2707d17edebc268136f",
+    "note": "SettingsRepository/SettingsScreen 本次只加 TTS 云端三键与朗读 UI，TranscribeMode 逻辑零改动，仅行号漂移",
+    "acked_at": "2026-10-24 11:32:55"
+   },
+   "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
+    "sha1": "6fd5e959d9b97921e0f85c4bda3f510bd715aba1",
+    "note": "SettingsRepository/SettingsScreen 本次只加 TTS 云端三键与朗读 UI，TranscribeMode 逻辑零改动，仅行号漂移",
+    "acked_at": "2026-10-24 11:32:55"
+   }
+  }
+ }
+}
