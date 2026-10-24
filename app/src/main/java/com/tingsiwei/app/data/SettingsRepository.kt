@@ -25,6 +25,14 @@ object TranscribeMode {
 object TtsEngine {
     const val SYSTEM = "system" // 系统自带 TTS（依赖手机装了哪个语音引擎）
     const val LOCAL = "local"   // 内置离线模型（sherpa-onnx，可在设置里下载）
+    const val CLOUD = "cloud"   // 在线大模型朗读（默认硅基流动 CosyVoice2，需联网并在设置里填 Key）
+}
+
+/** 在线朗读的默认服务参数；音色完整清单在 tts/CloudTts.VOICES */
+object TtsCloudDefaults {
+    const val BASE_URL = "https://api.siliconflow.cn/v1"
+    const val MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+    const val VOICE = "$MODEL:anna"
 }
 
 data class AppSettings(
@@ -42,8 +50,12 @@ data class AppSettings(
     val llmConservative: Boolean = false,
     /** 思路精修（三段式：起草→自查→按思路出图）。更慢但图文更一致；默认关=一次成稿，快约 3 倍 */
     val llmStagedThinking: Boolean = false,
-    /** 朗读引擎：系统 TTS / 本地离线模型 */
+    /** 朗读引擎：系统 TTS / 本地离线模型 / 在线大模型 */
     val ttsEngine: String = TtsEngine.SYSTEM,
+    /** 在线朗读三件套：接口地址、API Key、音色（模型固定走 TtsCloudDefaults.MODEL） */
+    val ttsCloudUrl: String = TtsCloudDefaults.BASE_URL,
+    val ttsCloudKey: String = "",
+    val ttsCloudVoice: String = TtsCloudDefaults.VOICE,
     /** 最近一次成功生成导图用的模型名；换模型后失败时用来提示用户切回去 */
     val lastGoodModel: String? = null,
     /** 是否已保存 GitHub 只读令牌（应用自更新用；令牌明文不放进本对象，单独按需读取） */
@@ -68,6 +80,9 @@ class SettingsRepository(private val context: Context) {
         val llmConservative = booleanPreferencesKey("llm_conservative")
         val llmStagedThinking = booleanPreferencesKey("llm_staged_thinking")
         val ttsEngine = stringPreferencesKey("tts_engine")
+        val ttsCloudUrl = stringPreferencesKey("tts_cloud_url")
+        val ttsCloudKey = stringPreferencesKey("tts_cloud_key")
+        val ttsCloudVoice = stringPreferencesKey("tts_cloud_voice")
         val lastGoodModel = stringPreferencesKey("last_good_model")
 
         // ---- 应用自更新 ----
@@ -93,6 +108,9 @@ class SettingsRepository(private val context: Context) {
             llmConservative = p[K.llmConservative] ?: false,
             llmStagedThinking = p[K.llmStagedThinking] ?: false,
             ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
+            ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
+            ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
+            ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -125,6 +143,9 @@ class SettingsRepository(private val context: Context) {
             llmConservative = p[K.llmConservative] ?: false,
             llmStagedThinking = p[K.llmStagedThinking] ?: false,
             ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
+            ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
+            ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
+            ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -166,6 +187,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setTtsEngine(engine: String) {
         context.dataStore.edit { it[K.ttsEngine] = engine }
+    }
+
+    suspend fun setTtsCloud(url: String, key: String, voice: String) {
+        context.dataStore.edit { p ->
+            p[K.ttsCloudUrl] = url.trim()
+            p[K.ttsCloudKey] = key.trim()
+            p[K.ttsCloudVoice] = voice.trim()
+        }
     }
 
     suspend fun setLastGoodModel(model: String) {

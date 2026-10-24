@@ -1,6 +1,7 @@
 package com.tingsiwei.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -18,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -51,12 +54,15 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.SettingsRepository
+import com.tingsiwei.app.data.TtsCloudDefaults
 import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
 import com.tingsiwei.app.llm.LlmPolicy
 import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
+import com.tingsiwei.app.tts.CloudTts
+import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,6 +81,9 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val stagedThinking by vm.stagedThinking.collectAsState()
     val ttsRate by vm.ttsRate.collectAsState()
     val ttsEngine by vm.ttsEngine.collectAsState()
+    val ttsCloudUrl by vm.ttsCloudUrl.collectAsState()
+    val ttsCloudKey by vm.ttsCloudKey.collectAsState()
+    val ttsCloudVoice by vm.ttsCloudVoice.collectAsState()
     val ttsModelState by vm.ttsModelState.collectAsState()
     val previewSpeaking by vm.previewSpeaking.collectAsState()
     val contextWindow by vm.contextWindow.collectAsState()
@@ -327,6 +336,13 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         )
                         Text("离线朗读模型（离线可用，约 215MB）", style = MaterialTheme.typography.bodySmall)
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = ttsEngine == TtsEngine.CLOUD,
+                            onClick = { vm.setTtsEngine(TtsEngine.CLOUD) },
+                        )
+                        Text("在线朗读（联网，声音最自然）", style = MaterialTheme.typography.bodySmall)
+                    }
                     if (ttsEngine == TtsEngine.LOCAL) {
                         val (stateText, ready) = when (ttsModelState.state) {
                             TtsModelState.READY -> "已下载（${Formatters.fileSize(ttsModelState.bytes)}）" to true
@@ -356,6 +372,46 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                                 TextButton(onClick = { vm.deleteTtsModel() }) { Text("删除模型") }
                             }
                         }
+                    }
+                    if (ttsEngine == TtsEngine.CLOUD) {
+                        OutlinedTextField(
+                            value = ttsCloudUrl,
+                            onValueChange = { vm.setTtsCloudUrl(it) },
+                            label = { Text("语音服务地址（默认硅基流动）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = ttsCloudKey,
+                            onValueChange = { vm.setTtsCloudKey(it) },
+                            label = { Text("API Key（siliconflow.cn 注册免费领）") },
+                            placeholder = { Text("sk-…") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Box {
+                            var voiceMenuOpen by remember { mutableStateOf(false) }
+                            OutlinedButton(onClick = { voiceMenuOpen = true }) {
+                                Text("音色：${CloudTts.voiceLabel(ttsCloudVoice)}")
+                            }
+                            DropdownMenu(expanded = voiceMenuOpen, onDismissRequest = { voiceMenuOpen = false }) {
+                                CloudTts.VOICES.forEach { (name, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            vm.setTtsCloudVoice(CloudTts.voiceId(name))
+                                            voiceMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            "用 CosyVoice2 语音大模型，联网时边生成边播，断句与人味都明显更好；模型当前免费，走手机流量。出错会自动先用离线/系统语音并提示原因",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     OutlinedButton(onClick = { vm.togglePreview() }) {
                         Text(if (previewSpeaking) "停止试听" else "试听当前引擎")
@@ -459,6 +515,9 @@ class SettingsViewModel : ViewModel() {
     val stagedThinking = MutableStateFlow(false)
     val ttsRate = MutableStateFlow(1.0f)
     val ttsEngine = MutableStateFlow(TtsEngine.SYSTEM)
+    val ttsCloudUrl = MutableStateFlow(TtsCloudDefaults.BASE_URL)
+    val ttsCloudKey = MutableStateFlow("")
+    val ttsCloudVoice = MutableStateFlow(TtsCloudDefaults.VOICE)
     val ttsModelState = MutableStateFlow(TtsModelStateUi())
     val previewSpeaking = MutableStateFlow(false)
     val contextWindow = MutableStateFlow(LlmPolicy.DEFAULT_CONTEXT_WINDOW)
@@ -479,6 +538,9 @@ class SettingsViewModel : ViewModel() {
             stagedThinking.value = s.llmStagedThinking
             ttsRate.value = s.ttsRate
             ttsEngine.value = s.ttsEngine
+            ttsCloudUrl.value = s.ttsCloudUrl
+            ttsCloudKey.value = s.ttsCloudKey
+            ttsCloudVoice.value = s.ttsCloudVoice
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
@@ -568,6 +630,26 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repo.setTtsEngine(e) }
     }
 
+    // 在线朗读三项改动即存，免去单独的保存按钮（避免「填了 Key 忘了保存」）
+    fun setTtsCloudUrl(u: String) {
+        ttsCloudUrl.value = u
+        persistTtsCloud()
+    }
+
+    fun setTtsCloudKey(k: String) {
+        ttsCloudKey.value = k
+        persistTtsCloud()
+    }
+
+    fun setTtsCloudVoice(v: String) {
+        ttsCloudVoice.value = v
+        persistTtsCloud()
+    }
+
+    private fun persistTtsCloud() {
+        viewModelScope.launch { repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value) }
+    }
+
     fun refreshTtsModelState() {
         val ready = ModelManager.isTtsReady(context)
         ttsModelState.value = if (ready) {
@@ -634,12 +716,23 @@ class SettingsViewModel : ViewModel() {
             return
         }
         viewModelScope.launch {
-            previewTts.speak("你好，这是听的思维的朗读试听。一二三四五，上山打老虎。", ttsRate.value, ttsEngine.value)
+            previewTts.speak(
+                "你好，这是听的思维的朗读试听。一二三四五，上山打老虎。",
+                ttsRate.value,
+                ttsEngine.value,
+                cloudConfig(),
+            )
             previewSpeaking.value = true
             while (previewTts.isSpeaking) kotlinx.coroutines.delay(300)
             previewSpeaking.value = false
         }
     }
+
+    /** 在线引擎需要的配置从当前填写值组装（未选在线引擎时返回 null） */
+    private fun cloudConfig(): CloudTtsConfig? =
+        if (ttsEngine.value == TtsEngine.CLOUD) {
+            CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value)
+        } else null
 
     fun setMinInterval(ms: Long) {
         minIntervalMs.value = ms

@@ -60,11 +60,18 @@ class TtsPlayer(
 
     var onStateChange: (() -> Unit)? = null
 
-    /** engine 取 data.TtsEngine 的常量（"system" / "local"） */
-    fun speak(text: String, rate: Float, engine: String) {
+    /** engine 取 data.TtsEngine 的常量（"system" / "local" / "cloud"）；cloud 引擎需传 [cloud] 配置 */
+    fun speak(text: String, rate: Float, engine: String, cloud: CloudTtsConfig? = null) {
         stop()
         liveRate = rate
         when (engine) {
+            TtsEngine.CLOUD -> {
+                if (cloud == null || cloud.apiKey.isBlank()) {
+                    onMessage?.invoke("还没配置在线朗读：到设置页「朗读」里填语音服务的 API Key")
+                } else {
+                    speakCloud(text, cloud)
+                }
+            }
             TtsEngine.LOCAL -> {
                 if (ModelManager.isTtsReady(appCtx)) {
                     speakLocal(text)
@@ -99,6 +106,12 @@ class TtsPlayer(
         playing.set(false)
         localJob?.cancel()
         localJob = null
+        // 立刻掐声：在线朗读缓冲了约 10 秒音频，等协程自己退出太慢；本地引擎的回调也会随即返回 false
+        try {
+            track?.pause()
+            track?.flush()
+        } catch (_: Exception) {
+        }
         try {
             systemTts?.stop()
         } catch (_: Exception) {
@@ -307,6 +320,8 @@ class TtsPlayer(
                 }
                 // 合成完了，等缓冲区里最后一段播出去
                 while (playing.get() && t.playbackHeadPosition < totalFrames) delay(100)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                return@launch // stop() 撞上收尾轮询：是正常停止，不是失败
             } catch (e: Exception) {
                 if (playing.getAndSet(false)) onStateChange?.invoke()
                 onMessage?.invoke("离线朗读失败：${e.message ?: "未知错误"}")
@@ -321,6 +336,93 @@ class TtsPlayer(
                 } catch (_: Exception) {
                 }
                 track = null
+            }
+            if (playing.getAndSet(false)) onStateChange?.invoke()
+        }
+    }
+
+    // ---------- 在线朗读（云端大模型，见 CloudTts） ----------
+
+    /**
+     * 云端流式朗读：逐句请求、AudioTrack 跨句复用（与离线引擎同构），失败自动退回离线/系统语音并明说。
+     * 缓冲给足约 10 秒：一句写完时缓冲里还压着没播的量，足够盖住下一句的网络往返，句间不出缝。
+     * 每句请求前取一次 liveRate，朗读中拖调速条下一句生效。
+     */
+    private fun speakCloud(text: String, cfg: CloudTtsConfig) {
+        playing.set(true)
+        onStateChange?.invoke()
+        localJob = scope.launch {
+            var local: AudioTrack? = null
+            var cloudError: String? = null
+            try {
+                val client = CloudTts(cfg = cfg)
+                val sampleRate = CloudTts.SAMPLE_RATE
+                val minBuf = AudioTrack.getMinBufferSize(
+                    sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+                )
+                val t = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .setBufferSizeInBytes(maxOf(minBuf * 4, sampleRate * 2 * 10))
+                    .build()
+                local = t
+                this@TtsPlayer.track = t
+                t.play()
+                var totalFrames = 0
+                for (chunk in splitForSpeech(text, maxChars = 120)) {
+                    if (!playing.get()) break
+                    client.streamPcm(chunk, liveRate) { pcm ->
+                        if (!playing.get()) return@streamPcm false
+                        if (pcm.isNotEmpty()) {
+                            totalFrames += pcm.size
+                            t.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        }
+                        playing.get()
+                    }
+                }
+                // 全部请求完了，等缓冲区里最后一段播出去
+                while (playing.get() && t.playbackHeadPosition < totalFrames) delay(100)
+            } catch (e: CloudTts.CloudTtsException) {
+                cloudError = e.message ?: "未知错误"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                return@launch // stop() 撞上收尾轮询：是正常停止，不是失败
+            } catch (e: Exception) {
+                cloudError = e.message ?: "未知错误"
+            } finally {
+                try {
+                    local?.stop()
+                } catch (_: Exception) {
+                }
+                try {
+                    local?.release()
+                } catch (_: Exception) {
+                }
+                this@TtsPlayer.track = null
+            }
+            if (cloudError != null) {
+                // 失败不空手：退回离线/系统引擎把这次读完（对齐离线模型缺下载时的回落惯例），消息里明说原因
+                val tail = when {
+                    ModelManager.isTtsReady(appCtx) -> {
+                        speakLocal(text)
+                        "，本次先用离线模型"
+                    }
+                    speakSystemOrQueue(text, liveRate) -> "，本次先用系统语音"
+                    else -> "，且本机没有可用的离线或系统语音"
+                }
+                onMessage?.invoke("在线朗读失败：$cloudError$tail")
+                return@launch
             }
             if (playing.getAndSet(false)) onStateChange?.invoke()
         }
