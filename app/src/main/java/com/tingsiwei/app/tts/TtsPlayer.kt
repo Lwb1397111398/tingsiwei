@@ -291,7 +291,9 @@ class TtsPlayer(
                             .build()
                     )
                     .setTransferMode(AudioTrack.MODE_STREAM)
-                    .setBufferSizeInBytes(maxOf(minBuf * 4, 16384))
+                    // 约 5 秒领先量（≈1~2 句）：合成背靠背跑进缓冲盖住每句开头的启动耗时，句间不出缝；
+                    // 代价是调速最多延后约 5 秒生效（已按旧语速压进缓冲的量）。stop() 的 pause+flush 照样立刻掐声
+                    .setBufferSizeInBytes(maxOf(minBuf * 4, sampleRate * 2 * 5))
                     .build()
                 local = t
                 track = t
@@ -311,8 +313,9 @@ class TtsPlayer(
                     }
                     playing.get()
                 }
-                // 逐句合成、AudioTrack 跨句复用，听感连续；每句开合成都前取一次 liveRate，
-                // 朗读中拖调速条，当前句放完下一句立刻按新语速来。
+                // 逐句合成、AudioTrack 跨句复用，听感连续；缓冲约 5 秒，合成自然跑在播放前面，
+                // 边播当前句边把后面几句压进缓冲（等价预取，句间启动耗时被领先量盖住）。
+                // 每句开合成都前取一次 liveRate；有领先量后调速最多延后约 5 秒生效（旧语速已入缓冲的量）。
                 // 句子也是引擎的天然合成单元（内部本就逐句出声），自己先拆好还能压住内存。
                 for (chunk in splitForSpeech(text, maxChars = 120)) {
                     if (!playing.get()) break

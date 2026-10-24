@@ -19,7 +19,7 @@
   - **失败回落**（`:417-428`）：`CloudTtsException` 等异常不终止朗读——优先退离线引擎（`ModelManager.isTtsReady` → `speakLocal`），没有就退系统语音（`speakSystemOrQueue`），都没有才罢休；`onMessage` 一次性说明「在线朗读失败：<原因>，本次先用离线/系统语音」。`stop()` 撞上收尾轮询的 `CancellationException` 属正常停止，静默返回（`:399-401` 离线分支同样处理）。
   - `CloudTts`（`tts/CloudTts.kt`，182 行）：默认硅基流动 `FunAudioLLM/CosyVoice2-0.5B`（`DEFAULT_MODEL :26`），OpenAI `/audio/speech` 兼容格式。`endpoint()`（`:54-61`）规范化用户手填地址（补协议、补 `/v1/audio/speech`，与 LLM 的 `LlmEndpoint` 同规则）；`streamPcm(text, speed, onPcm)`（`:67-125`）发 `response_format=pcm + sample_rate=24000 + stream=true` 的 POST，响应是 HTTP chunked 的 16bit 小端 PCM，按 8KB 块读入、奇数字节进位拼接成 ShortArray 回调；错误映射成人话（401/403 → 查 Key、429 → 限流、4xx → 尽量抽出服务端 `message`）。8 种预置音色 `VOICES`（`:32-39`，anna/bella/claire/diana/alex/benjamin/charles/david）+ `voiceId/voiceLabel` 互转（`:43-47`）。HTTP 接缝 `CloudTtsTransport`（`:135-148`）：生产 `OkHttpCloudTtsTransport`（`:140-167`，成功路径不 close 流，整段朗读期间慢慢读）、单测注入 `FakeCloudTtsStream`。
 - **离线引擎分支**（`TtsPlayer.kt:76-84`）：先 `ModelManager.isTtsReady(appCtx)` 判 kokoro 全部 373 个文件是否就绪。就绪 → `speakLocal(text)`（`:263-345`）；未就绪 → 退回系统引擎并提示「离线朗读模型还没下载，这次先用系统语音；可在设置里下载（约 215MB）」。
-  - `speakLocal`：`LocalTtsEngine.obtain(appCtx)` 拿进程级单例（`LocalTtsEngine` 在 `TtsPlayer.kt:435-453`，模型加载一次常驻复用），建 `AudioTrack`（采样率取自引擎、缓冲 `maxOf(minBuf*4, 16384)`），逐句 `engine.tts.generateWithCallback(chunk, SherpaTts.VOICE_ID, liveRate, TtsChunkCallback(chunkHandler))`（`:319`）。回调把 float 采样转 PCM16 阻塞写入；停止时回调返回 false 让 native 合成停下。
+  - `speakLocal`：`LocalTtsEngine.obtain(appCtx)` 拿进程级单例（`LocalTtsEngine` 在 `TtsPlayer.kt:435-453`，模型加载一次常驻复用），建 `AudioTrack`（采样率取自引擎、缓冲 `maxOf(minBuf*4, sampleRate*2*5)` 约 5 秒），逐句 `engine.tts.generateWithCallback(chunk, SherpaTts.VOICE_ID, liveRate, TtsChunkCallback(chunkHandler))`（`:319`）。回调把 float 采样转 PCM16 阻塞写入；停止时回调返回 false 让 native 合成停下。约 5 秒的缓冲让合成自然跑在播放前面（领先量 ≈1~2 句）：逐句循环本就背靠背合成、不等上一句播完，领先量盖住每句开头的启动耗时（jieba 分词 + 模型首趟推理），句间不出缝——等价于「边播当前句边预取后面几句」，与在线路径「靠大缓冲吸收句间空档」同一套路。
   - `SherpaTts`（`tts/SherpaTts.kt:14-45`）是 kokoro-int8-multi-lang-v1_1 配置封装：lexicon 三件套 + jieba 词典 + espeak-ng-data + ruleFsts（phone/date/number-zh.fst），`maxNumSentences=1`、`silenceScale=0.5f`（压掉 kokoro 句读处的长停顿），默认音色 `VOICE_ID=3`（中文女声 zf_001）。
   - 回调必须用 Java 类 `TtsChunkCallback`（`tts/TtsChunkCallback.java`）：sherpa-onnx 的 JNI 用硬编码签名反查回调方法，Kotlin 2.x lambda 没有桥接方法，合成首个分片会 abort。
 - **系统引擎分支**（`TtsPlayer.kt:85-89`）：`speakSystemOrQueue` 失败才提示「本机没有可用的系统朗读引擎…」。
@@ -35,7 +35,7 @@
 
 | 相对路径 | 行数 | 一句话职责 |
 | --- | --- | --- |
-| `app/src/main/java/com/tingsiwei/app/tts/TtsPlayer.kt` | 477 | 朗读门面：三引擎分发、在线引擎流式播放与失败回落、系统引擎初始化兜底与逐块投喂、离线引擎 AudioTrack 播放、运行中调速、按句切块 `splitForSpeech`、`LocalTtsEngine` 进程级单例 |
+| `app/src/main/java/com/tingsiwei/app/tts/TtsPlayer.kt` | 480 | 朗读门面：三引擎分发、在线引擎流式播放与失败回落、系统引擎初始化兜底与逐块投喂、离线引擎 AudioTrack 播放（约 5 秒缓冲领先量）、运行中调速、按句切块 `splitForSpeech`、`LocalTtsEngine` 进程级单例 |
 | `app/src/main/java/com/tingsiwei/app/tts/CloudTts.kt` | 182 | 在线朗读客户端：硅基流动 CosyVoice2 请求组装、地址规范化、chunked PCM 跨块解码、错误映射成人话、8 预置音色、HTTP 接缝与 OkHttp 实现 |
 | `app/src/main/java/com/tingsiwei/app/tts/SherpaTts.kt` | 51 | kokoro 离线引擎配置封装（`OfflineTtsConfig` 组装 + `VOICE_ID` 常量） |
 | `app/src/main/java/com/tingsiwei/app/tts/TtsChunkCallback.java` | 27 | JNI 签名精确匹配的合成回调（Java 实现，Kotlin lambda 会 abort） |
@@ -78,7 +78,7 @@
 ## 已知坑与约束
 
 1. **在线朗读必须有网、必须填 Key**：没填 Key 在发起前就提示；请求失败（断网/Key 错/限流）不空手——自动退回离线/系统引擎读完本次并弹原因（`TtsPlayer.kt:417-428`）。回落选择发生在失败当下，若离线模型没下载则直接落系统语音。
-2. **句间连续性靠 10 秒缓冲而不是预取**：逐句串行请求（不并发预取下一句），网络往返（首包约 300~600ms + 传输）被 AudioTrack 的大缓冲吸收；网络极慢（>10 秒拿不到下一句首包）时句间会有短暂停顿。语速 2x 时缓冲等效时长减半，仍够用。
+2. **句间连续性靠播放缓冲的领先量，不是并发预取**：两个流式引擎都是逐句串行合成/请求（不并发开第二个任务——离线引擎是 native 单例不能并行，在线路径 10 秒缓冲足够），靠 AudioTrack 大缓冲吸收句间空档。离线路径约 5 秒缓冲（2026-10-24 起）：合成背靠背跑进缓冲，领先量 ≈1~2 句盖住每句启动耗时。边界：①设备算力不足、合成慢于实时播放时领先量攒不起来，句间/句中仍会断，后备手段依次是 `SherpaTts` 构造参数 `numThreads` 2→4、实验调 `maxNumSentences`、改用在线引擎；②全文第一句的冷启动（首趟推理几百毫秒到 1 秒）没有领先量可盖，消不掉；③调速生效最多延后约 5 秒（旧语速已压进缓冲的量，此前是当前句放完即生效）。在线路径网络极慢（>10 秒拿不到下一句首包）时句间会有短暂停顿；语速 2x 时缓冲等效时长减半。
 3. **「停」的即时性**：`stop()` 里 `pause+flush` 立刻掐声（`:110-114`）；被停协程可能还挂在 socket read 上（readTimeout 30 秒），最多滞留一个读超时后自行退出，期间不再出声、无副作用。
 4. **在线朗读走手机流量**：计费按输入文本 UTF-8 字节数；CosyVoice2 在硅基流动模型页当前标价免费（以官网实时价格为准）。一篇 5000 字笔记约 25 次请求（每次一句 ≤120 字）。
 5. **`isSpeaking` 轮询竞态（继承）**：系统引擎走「创建中」路径时 `playing` 要等初始化回调才置 true，首轮检查可能提前退出循环；离线与在线路径 `playing` 在进入合成前就置 true，无此问题。
@@ -91,6 +91,8 @@
 12. **pcm 字节序文档未写明**：服务端实际输出 16bit 小端（业界惯例，单测按小端解码通过、真机待最终确认——若真机出现刺耳杂音，优先怀疑字节序）。
 
 ## 最后更新
+
+2026-10-24 · 离线朗读句间隔优化：`speakLocal` 的 AudioTrack 缓冲从 `maxOf(minBuf*4, 16384)`（约 0.34 秒）放大到 `sampleRate*2*5`（约 5 秒）——逐句循环本就背靠背合成，放大缓冲即得「边播当前句边预合成后面几句」的领先量，句间启动耗时被盖住。调速生效最多延后约 5 秒（坑 2）；`stop()` 的 `pause+flush` 照旧立刻掐声。184 个单测全过、`assembleDebug` 成功；句间听感改善待真机试听（UNMEASURED）。
 
 2026-10-24 · 新增在线朗读引擎（第三引擎）：`CloudTts.kt`（182 行，硅基流动 CosyVoice2 流式 PCM）、`TtsPlayer.speakCloud`（失败自动回落离线/系统）、`stop()` 加 `pause+flush` 立刻掐声、`speak` 加第 4 参 `cloud: CloudTtsConfig?`；设置页与详情页调用点改传云端配置；新增 `CloudTtsTest` 7 例（184 个单测全过）。两个调用点的行号按本次重排后重标。
 
