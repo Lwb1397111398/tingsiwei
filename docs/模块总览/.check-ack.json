@@ -2,21 +2,21 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "6fd5e959d9b97921e0f85c4bda3f510bd715aba1",
-    "note": "SettingsScreen.kt 本次只插了朗读卡的在线朗读表单（在应用更新卡之前），应用更新卡功能零改动，仅行号漂移",
-    "acked_at": "2026-10-24 11:32:55"
+    "sha1": "3c96db786b6dce4314d60fd0e5911ebb4709cef8",
+    "note": "SettingsScreen.kt 本次改动全在朗读卡（在线模型/检索/音色chips），不触应用更新卡",
+    "acked_at": "2026-10-24 14:46:04"
    }
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "448e5445872f71580c40e2707d17edebc268136f",
-    "note": "SettingsRepository/SettingsScreen 本次只加 TTS 云端三键与朗读 UI，TranscribeMode 逻辑零改动，仅行号漂移",
-    "acked_at": "2026-10-24 11:32:55"
+    "sha1": "b81e64967dffa7b29b2780545fa23e4a9c625990",
+    "note": "本次改动为 TTS 云朗读（tts_cloud_model 键+朗读卡UI），不触转写模式逻辑",
+    "acked_at": "2026-10-24 14:46:04"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "6fd5e959d9b97921e0f85c4bda3f510bd715aba1",
-    "note": "SettingsRepository/SettingsScreen 本次只加 TTS 云端三键与朗读 UI，TranscribeMode 逻辑零改动，仅行号漂移",
-    "acked_at": "2026-10-24 11:32:55"
+    "sha1": "3c96db786b6dce4314d60fd0e5911ebb4709cef8",
+    "note": "本次改动为 TTS 云朗读（tts_cloud_model 键+朗读卡UI），不触转写模式逻辑",
+    "acked_at": "2026-10-24 14:46:04"
    }
   }
  }
