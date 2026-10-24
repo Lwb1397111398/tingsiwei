@@ -31,7 +31,7 @@ class CloudTtsTest {
         var getCode = 200
         var getBody = ""
 
-        override fun post(url: String, key: String, jsonBody: String): CloudTtsTransport.Resp {
+        override fun post(url: String, key: String, jsonBody: String, authHeaderName: String): CloudTtsTransport.Resp {
             urls += url
             keys += key
             bodies += jsonBody
@@ -45,7 +45,7 @@ class CloudTtsTest {
             }
         }
 
-        override fun get(url: String, key: String): CloudTtsTransport.Resp {
+        override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
             gets += url
             keys += key
             return if (getCode == 200) {

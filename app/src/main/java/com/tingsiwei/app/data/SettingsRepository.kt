@@ -35,6 +35,21 @@ object TtsCloudDefaults {
     const val VOICE = "$MODEL:anna"
 }
 
+/** 在线朗读的两档服务：官方 ElevenLabs（地址/协议内置）与自定义 OpenAI 兼容渠道 */
+object TtsCloudProvider {
+    const val ELEVEN = "eleven"
+    const val CUSTOM = "custom"
+}
+
+/** 官方 ElevenLabs 档的内置参数：地址与默认模型写死，用户只填 Key 和挑音色 */
+object TtsElevenDefaults {
+    const val BASE_URL = "https://api.elevenlabs.io/v1"
+    const val MODEL = "eleven_multilingual_v2"
+
+    /** 预置音色 Roger（官方 premade 男声），实测中文可读；完整列表可在线拉取点选 */
+    const val VOICE = "CwhRBWXzGAHq8TQ4Fs17"
+}
+
 data class AppSettings(
     val llmUrl: String,
     val llmKey: String,
@@ -57,6 +72,12 @@ data class AppSettings(
     val ttsCloudKey: String = "",
     val ttsCloudVoice: String = TtsCloudDefaults.VOICE,
     val ttsCloudModel: String = TtsCloudDefaults.MODEL,
+    /** 在线朗读服务档位：官方 ElevenLabs（默认）/ 自定义 OpenAI 兼容 */
+    val ttsCloudProvider: String = TtsCloudProvider.ELEVEN,
+    /** 官方 ElevenLabs 档三件套：API Key、音色 ID（可在线拉取点选）、模型 */
+    val ttsElevenKey: String = "",
+    val ttsElevenVoice: String = TtsElevenDefaults.VOICE,
+    val ttsElevenModel: String = TtsElevenDefaults.MODEL,
     /** 最近一次成功生成导图用的模型名；换模型后失败时用来提示用户切回去 */
     val lastGoodModel: String? = null,
     /** 是否已保存 GitHub 只读令牌（应用自更新用；令牌明文不放进本对象，单独按需读取） */
@@ -85,6 +106,10 @@ class SettingsRepository(private val context: Context) {
         val ttsCloudKey = stringPreferencesKey("tts_cloud_key")
         val ttsCloudVoice = stringPreferencesKey("tts_cloud_voice")
         val ttsCloudModel = stringPreferencesKey("tts_cloud_model")
+        val ttsCloudProvider = stringPreferencesKey("tts_cloud_provider")
+        val ttsElevenKey = stringPreferencesKey("tts_eleven_key")
+        val ttsElevenVoice = stringPreferencesKey("tts_eleven_voice")
+        val ttsElevenModel = stringPreferencesKey("tts_eleven_model")
         val lastGoodModel = stringPreferencesKey("last_good_model")
 
         // ---- 应用自更新 ----
@@ -114,6 +139,10 @@ class SettingsRepository(private val context: Context) {
             ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
             ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
             ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
+            ttsCloudProvider = p[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
+            ttsElevenKey = p[K.ttsElevenKey].orEmpty(),
+            ttsElevenVoice = p[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
+            ttsElevenModel = p[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -150,6 +179,10 @@ class SettingsRepository(private val context: Context) {
             ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
             ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
             ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
+            ttsCloudProvider = p[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
+            ttsElevenKey = p[K.ttsElevenKey].orEmpty(),
+            ttsElevenVoice = p[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
+            ttsElevenModel = p[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -199,6 +232,20 @@ class SettingsRepository(private val context: Context) {
             p[K.ttsCloudKey] = key.trim()
             p[K.ttsCloudVoice] = voice.trim()
             p[K.ttsCloudModel] = model.trim()
+        }
+    }
+
+    /** 切换在线朗读服务档位（官方 ElevenLabs / 自定义 OpenAI 兼容），两档配置互不覆盖 */
+    suspend fun setTtsCloudProvider(provider: String) {
+        context.dataStore.edit { it[K.ttsCloudProvider] = provider.trim() }
+    }
+
+    /** 官方 ElevenLabs 档三项改动即存（Key / 音色 ID / 模型），与自定义档的 setTtsCloud 对应 */
+    suspend fun setTtsEleven(key: String, voice: String, model: String) {
+        context.dataStore.edit { p ->
+            p[K.ttsElevenKey] = key.trim()
+            p[K.ttsElevenVoice] = voice.trim()
+            p[K.ttsElevenModel] = model.trim()
         }
     }
 

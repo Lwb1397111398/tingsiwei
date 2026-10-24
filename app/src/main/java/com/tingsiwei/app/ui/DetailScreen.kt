@@ -66,7 +66,6 @@ import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.data.db.VersionEntity
-import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.export.Exporter
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
@@ -642,9 +641,7 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
                 ttsSpeaking.value = false
             } else {
                 val s = settingsRepo.current()
-                val cloud = if (s.ttsEngine == TtsEngine.CLOUD) {
-                    CloudTtsConfig(s.ttsCloudUrl, s.ttsCloudKey, s.ttsCloudVoice, s.ttsCloudModel)
-                } else null
+                val cloud = CloudTtsConfig.fromSettings(s)
                 tts.speak(text, ttsRate.value, s.ttsEngine, cloud)
                 ttsSpeaking.value = true
                 while (tts.isSpeaking) delay(300)

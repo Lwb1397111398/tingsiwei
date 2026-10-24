@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.tingsiwei.app.data.TtsCloudProvider
 import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.transcribe.ModelManager
 import kotlinx.coroutines.CoroutineScope
@@ -71,7 +72,8 @@ class TtsPlayer(
         when (engine) {
             TtsEngine.CLOUD -> {
                 if (cloud == null || cloud.key.isBlank()) {
-                    onMessage?.invoke("还没配置在线朗读：到设置页「朗读」里填语音服务的 API Key")
+                    val target = if (cloud?.provider == TtsCloudProvider.ELEVEN) "ElevenLabs 的" else "语音服务的"
+                    onMessage?.invoke("还没配置在线朗读：到设置页「朗读」里填${target}API Key")
                 } else {
                     speakCloud(text, cloud, fallback)
                 }
@@ -362,7 +364,10 @@ class TtsPlayer(
             var local: AudioTrack? = null
             var cloudError: String? = null
             try {
-                val client = CloudTts(cfg = cfg)
+                val client: CloudTtsClient = when (cfg.provider) {
+                    TtsCloudProvider.ELEVEN -> ElevenTts(cfg = cfg)
+                    else -> CloudTts(cfg = cfg)
+                }
                 val sampleRate = CloudTts.SAMPLE_RATE
                 val minBuf = AudioTrack.getMinBufferSize(
                     sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT

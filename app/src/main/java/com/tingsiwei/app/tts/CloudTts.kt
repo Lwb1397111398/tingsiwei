@@ -1,6 +1,9 @@
 package com.tingsiwei.app.tts
 
 import android.util.Log
+import com.tingsiwei.app.data.TtsCloudProvider
+import com.tingsiwei.app.data.TtsElevenDefaults
+import com.tingsiwei.app.data.TtsEngine
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -22,7 +25,7 @@ import java.util.concurrent.TimeUnit
 class CloudTts(
     private val transport: CloudTtsTransport = OkHttpCloudTtsTransport,
     private val cfg: CloudTtsConfig,
-) {
+) : CloudTtsClient {
 
     companion object {
         const val DEFAULT_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
@@ -127,7 +130,7 @@ class CloudTts(
      * 合成 [text]，把 16bit 小端 PCM 按块回调（单位：采样值，已统一到 [SAMPLE_RATE]）。
      * onPcm 回 false 立即断流停止。失败抛 [CloudTtsException]；onPcm 回 false 属正常停止，不抛。
      */
-    fun streamPcm(text: String, speed: Float, onPcm: (ShortArray) -> Boolean) {
+    override fun streamPcm(text: String, speed: Float, onPcm: (ShortArray) -> Boolean) {
         val key = cfg.key.trim()
         if (key.isEmpty()) throw CloudTtsException("还没填在线朗读的 API Key，到设置页「朗读」里填")
         val voice = buildVoice(cfg.model, cfg.voice)
@@ -160,19 +163,8 @@ class CloudTts(
         val ins = assertAudioBody(resp)
         Log.i(TAG, "语音请求发出：${endpoint()} model=${cfg.model} voice=$voice 格式=pcm-stream")
         try {
-            val buf = ByteArray(8192)
-            var carry = ByteArray(0) // 奇数字节收尾时剩下的半个采样，拼到下一块开头
-            var totalBytes = 0
-            while (true) {
-                val n = ins.read(buf)
-                if (n < 0) break
-                if (n == 0) continue
-                totalBytes += n
-                val data = carry + buf.copyOfRange(0, n)
-                val frames = data.size / 2
-                if (frames > 0 && !onPcm(CloudTtsAudio.decodePcmLe(data.copyOfRange(0, frames * 2)))) return
-                carry = if (data.size % 2 == 1) byteArrayOf(data[data.size - 1]) else ByteArray(0)
-            }
+            val totalBytes = CloudTtsAudio.drainPcmStream(ins, onPcm)
+            if (totalBytes < 0) return // onPcm 回 false：用户停止，正常返回不报错
             if (totalBytes == 0) throw CloudTtsException("语音接口没有返回音频")
             Log.i(TAG, "流式 PCM 完成：$totalBytes 字节 model=${cfg.model}")
         } catch (e: CloudTtsException) {
@@ -295,13 +287,32 @@ class CloudTts(
         }
 }
 
+/** 在线朗读客户端的统一播放接口：TtsPlayer 只依赖它做流式朗读，具体协议在 [CloudTts]（OpenAI 兼容）与 [ElevenTts]（官方） */
+interface CloudTtsClient {
+    fun streamPcm(text: String, speed: Float, onPcm: (ShortArray) -> Boolean)
+}
+
 /** 在线朗读配置（调用方从设置读好传入，本层不读设置，与 TtsPlayer 的引擎字符串同约定） */
 data class CloudTtsConfig(
     val baseUrl: String,
     val key: String,
     val voice: String,
     val model: String = CloudTts.DEFAULT_MODEL,
-)
+    /** 服务档位：官方 ElevenLabs（voice 存官方音色 ID）/ 自定义 OpenAI 兼容（默认，向后兼容省略传参） */
+    val provider: String = TtsCloudProvider.CUSTOM,
+) {
+    companion object {
+        /** 按设置快照组装在线朗读配置；引擎没选「在线朗读」返回 null。官方档地址内置，自定义档用四件套 */
+        fun fromSettings(s: com.tingsiwei.app.data.AppSettings): CloudTtsConfig? =
+            when {
+                s.ttsEngine != TtsEngine.CLOUD -> null
+                s.ttsCloudProvider == TtsCloudProvider.ELEVEN -> CloudTtsConfig(
+                    TtsElevenDefaults.BASE_URL, s.ttsElevenKey, s.ttsElevenVoice, s.ttsElevenModel, TtsCloudProvider.ELEVEN,
+                )
+                else -> CloudTtsConfig(s.ttsCloudUrl, s.ttsCloudKey, s.ttsCloudVoice, s.ttsCloudModel)
+            }
+    }
+}
 
 /** HTTP 往来接缝：生产用 [OkHttpCloudTtsTransport]，单测注入假实现（不加任何测试依赖）。 */
 interface CloudTtsTransport {
@@ -312,8 +323,9 @@ interface CloudTtsTransport {
         val contentType: String = "",
     )
 
-    fun post(url: String, key: String, jsonBody: String): Resp
-    fun get(url: String, key: String): Resp
+    /** [authHeaderName]：鉴权头名。Authorization（缺省）按 Bearer 拼；其他头名（如 ElevenLabs 的 xi-api-key）直接用 key 原值 */
+    fun post(url: String, key: String, jsonBody: String, authHeaderName: String = "Authorization"): Resp
+    fun get(url: String, key: String, authHeaderName: String = "Authorization"): Resp
 }
 
 private val WAV_RETRY_CODES = setOf(400, 404, 415, 422)
@@ -326,10 +338,10 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    override fun post(url: String, key: String, jsonBody: String): CloudTtsTransport.Resp {
+    override fun post(url: String, key: String, jsonBody: String, authHeaderName: String): CloudTtsTransport.Resp {
         val req = Request.Builder()
             .url(url)
-            .header("Authorization", "Bearer $key")
+            .header(authHeaderName, if (authHeaderName == "Authorization") "Bearer $key" else key)
             .post(jsonBody.toRequestBody("application/json".toMediaType()))
             .build()
         val resp = client.newCall(req).execute()
@@ -347,10 +359,10 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
         }
     }
 
-    override fun get(url: String, key: String): CloudTtsTransport.Resp {
+    override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
         val req = Request.Builder()
             .url(url)
-            .header("Authorization", "Bearer $key")
+            .header(authHeaderName, if (authHeaderName == "Authorization") "Bearer $key" else key)
             .get()
             .build()
         val resp = client.newCall(req).execute()

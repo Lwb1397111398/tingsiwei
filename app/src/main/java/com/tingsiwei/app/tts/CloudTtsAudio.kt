@@ -1,5 +1,7 @@
 package com.tingsiwei.app.tts
 
+import java.io.InputStream
+
 /**
  * 云端朗读的音频纯函数：WAV（RIFF）解析与线性重采样。
  * 在线朗读首选流式 PCM；渠道不支持时自动改要 WAV 整段，这里负责把 WAV 还原成
@@ -7,6 +9,27 @@ package com.tingsiwei.app.tts
  * 不用关心服务端实际给了什么采样率。
  */
 object CloudTtsAudio {
+
+    /**
+     * 把 16bit 小端 PCM 流按块解码回调（8KB 一读，奇数字节进位拼到下一块），各在线客户端共用。
+     * 返回读到的总字节数；onPcm 回 false（用户停止）立即断流并返回 -1。
+     */
+    fun drainPcmStream(ins: InputStream, onPcm: (ShortArray) -> Boolean): Int {
+        val buf = ByteArray(8192)
+        var carry = ByteArray(0) // 奇数字节收尾时剩下的半个采样，拼到下一块开头
+        var totalBytes = 0
+        while (true) {
+            val n = ins.read(buf)
+            if (n < 0) return totalBytes
+            if (n == 0) continue
+            totalBytes += n
+            val data = carry + buf.copyOfRange(0, n)
+            val frames = data.size / 2
+            if (frames > 0 && !onPcm(decodePcmLe(data.copyOfRange(0, frames * 2)))) return -1
+            carry = if (data.size % 2 == 1) byteArrayOf(data[data.size - 1]) else ByteArray(0)
+        }
+    }
+
 
     class WavException(message: String) : RuntimeException(message)
 

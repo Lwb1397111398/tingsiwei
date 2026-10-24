@@ -55,6 +55,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.SettingsRepository
 import com.tingsiwei.app.data.TtsCloudDefaults
+import com.tingsiwei.app.data.TtsCloudProvider
+import com.tingsiwei.app.data.TtsElevenDefaults
 import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
@@ -63,6 +65,7 @@ import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
 import com.tingsiwei.app.tts.CloudTts
 import com.tingsiwei.app.tts.CloudTtsConfig
+import com.tingsiwei.app.tts.ElevenTts
 import com.tingsiwei.app.tts.OkHttpCloudTtsTransport
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.util.Formatters
@@ -88,6 +91,12 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val ttsCloudKey by vm.ttsCloudKey.collectAsState()
     val ttsCloudVoice by vm.ttsCloudVoice.collectAsState()
     val ttsCloudModel by vm.ttsCloudModel.collectAsState()
+    val ttsCloudProvider by vm.ttsCloudProvider.collectAsState()
+    val ttsElevenKey by vm.ttsElevenKey.collectAsState()
+    val ttsElevenVoice by vm.ttsElevenVoice.collectAsState()
+    val ttsElevenModel by vm.ttsElevenModel.collectAsState()
+    val elevenVoices by vm.elevenVoices.collectAsState()
+    val elevenBusy by vm.elevenBusy.collectAsState()
     val ttsModels by vm.ttsModels.collectAsState()
     val ttsModelsAll by vm.ttsModelsAll.collectAsState()
     val ttsBusy by vm.ttsBusy.collectAsState()
@@ -381,6 +390,95 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         }
                     }
                     if (ttsEngine == TtsEngine.CLOUD) {
+                        // 在线服务两档：官方 ElevenLabs（只填 Key）/ 自定义 OpenAI 兼容渠道；两档配置互不覆盖
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = ttsCloudProvider == TtsCloudProvider.ELEVEN,
+                                onClick = { vm.setTtsCloudProvider(TtsCloudProvider.ELEVEN) },
+                            )
+                            Text("官方 ElevenLabs（填 Key 即用）", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = ttsCloudProvider == TtsCloudProvider.CUSTOM,
+                                onClick = { vm.setTtsCloudProvider(TtsCloudProvider.CUSTOM) },
+                            )
+                            Text("自定义（OpenAI 兼容渠道）", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (ttsCloudProvider == TtsCloudProvider.ELEVEN) {
+                            Text(
+                                "已内置官方接口，不用填地址；免费档每月 1 万字符额度，用完等下月重置。" +
+                                    "语速条照常可用（官方支持 0.7~1.2 倍）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedTextField(
+                                value = ttsElevenKey,
+                                onValueChange = { vm.setTtsElevenKey(it) },
+                                label = { Text("API Key（elevenlabs.io 免费注册领取）") },
+                                placeholder = { Text("sk_…") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                            )
+                            OutlinedTextField(
+                                value = ttsElevenModel,
+                                onValueChange = { vm.setTtsElevenModel(it) },
+                                label = { Text("朗读模型（可手填，或点下方切换）") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                            )
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ElevenTts.MODELS.forEach { (id, label) ->
+                                    FilterChip(
+                                        selected = ttsElevenModel == id,
+                                        onClick = {
+                                            vm.setTtsElevenModel(id)
+                                            keyboard?.hide()
+                                        },
+                                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                                    )
+                                }
+                            }
+                            OutlinedTextField(
+                                value = ttsElevenVoice,
+                                onValueChange = { vm.setTtsElevenVoice(it) },
+                                label = { Text("音色（点「获取音色」选择，或手填音色 ID）") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                            )
+                            if (elevenVoices.isNotEmpty()) {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    elevenVoices.forEach { v ->
+                                        FilterChip(
+                                            selected = ttsElevenVoice == v.id,
+                                            onClick = {
+                                                vm.setTtsElevenVoice(v.id)
+                                                keyboard?.hide()
+                                            },
+                                            label = { Text(v.label, style = MaterialTheme.typography.bodySmall) },
+                                        )
+                                    }
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(onClick = { vm.fetchElevenVoices() }, enabled = !elevenBusy) {
+                                    Text("获取音色")
+                                }
+                                if (elevenBusy) {
+                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                    Text("获取中…", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            Text(
+                                "官方音色都能读中文；换模型或音色后点「试听当前引擎」验证",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
                         OutlinedTextField(
                             value = ttsCloudUrl,
                             onValueChange = { vm.setTtsCloudUrl(it) },
@@ -465,7 +563,8 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    } else if (ttsCloudKey.isNotBlank()) {
+                        }
+                    } else if (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()) {
                         // 最常见的「填了没反应」：配置都在，引擎却没切过来
                         Text(
                             "已填写在线朗读的 Key，但当前引擎不是「在线朗读」——要用它的声音，点选上面的「在线朗读」",
@@ -579,6 +678,13 @@ class SettingsViewModel : ViewModel() {
     val ttsCloudKey = MutableStateFlow("")
     val ttsCloudVoice = MutableStateFlow(TtsCloudDefaults.VOICE)
     val ttsCloudModel = MutableStateFlow(TtsCloudDefaults.MODEL)
+    val ttsCloudProvider = MutableStateFlow(TtsCloudProvider.ELEVEN)
+    val ttsElevenKey = MutableStateFlow("")
+    val ttsElevenVoice = MutableStateFlow(TtsElevenDefaults.VOICE)
+    val ttsElevenModel = MutableStateFlow(TtsElevenDefaults.MODEL)
+    /** 官方档「获取音色」拉到的列表；空 = 没拉过或本次没解析到 */
+    val elevenVoices = MutableStateFlow<List<ElevenTts.ElevenVoice>>(emptyList())
+    val elevenBusy = MutableStateFlow(false)
     val ttsModels = MutableStateFlow<List<String>>(emptyList())
     /** 检索结果里没筛出明确的语音模型时展示了全部模型，提示用户点选后试听验证 */
     val ttsModelsAll = MutableStateFlow(false)
@@ -607,6 +713,10 @@ class SettingsViewModel : ViewModel() {
             ttsCloudKey.value = s.ttsCloudKey
             ttsCloudVoice.value = s.ttsCloudVoice
             ttsCloudModel.value = s.ttsCloudModel
+            ttsCloudProvider.value = s.ttsCloudProvider
+            ttsElevenKey.value = s.ttsElevenKey
+            ttsElevenVoice.value = s.ttsElevenVoice
+            ttsElevenModel.value = s.ttsElevenModel
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
@@ -723,6 +833,56 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
+    // 官方 ElevenLabs 档：服务档位与三项配置改动即存（与自定义档同惯例），两档互不覆盖
+    fun setTtsCloudProvider(p: String) {
+        ttsCloudProvider.value = p
+        viewModelScope.launch { repo.setTtsCloudProvider(p) }
+    }
+
+    fun setTtsElevenKey(k: String) {
+        ttsElevenKey.value = k
+        persistTtsEleven()
+    }
+
+    fun setTtsElevenVoice(v: String) {
+        ttsElevenVoice.value = v
+        persistTtsEleven()
+    }
+
+    fun setTtsElevenModel(m: String) {
+        ttsElevenModel.value = m
+        persistTtsEleven()
+    }
+
+    private fun persistTtsEleven() {
+        viewModelScope.launch {
+            repo.setTtsEleven(ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value)
+        }
+    }
+
+    /** 拉官方音色列表：先存当前填写值，再 GET /voices 列成点选 chips（网络必须 IO 线程，同「检索模型」的坑） */
+    fun fetchElevenVoices() {
+        if (elevenBusy.value) return
+        viewModelScope.launch {
+            elevenBusy.value = true
+            try {
+                repo.setTtsEleven(ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value)
+                val list = withContext(Dispatchers.IO) {
+                    ElevenTts(
+                        OkHttpCloudTtsTransport,
+                        CloudTtsConfig(TtsElevenDefaults.BASE_URL, ttsElevenKey.value, "", ttsElevenModel.value, TtsCloudProvider.ELEVEN),
+                    ).fetchVoices()
+                }
+                elevenVoices.value = list
+                message.value = if (list.isEmpty()) "没解析到音色，可在音色框手填官方音色 ID" else "拉到 ${list.size} 个官方音色，点选即可"
+            } catch (e: Exception) {
+                message.value = e.message ?: "获取音色失败"
+            } finally {
+                elevenBusy.value = false
+            }
+        }
+    }
+
     /** 检索在线朗读渠道的可用模型：先存界面当前值，再 GET /models，筛出语音类模型列成点选 chips */
     fun fetchTtsModels() {
         if (ttsBusy.value) return
@@ -834,10 +994,14 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    /** 在线引擎需要的配置从当前填写值组装（未选在线引擎时返回 null） */
+    /** 在线引擎需要的配置从当前填写值组装（未选在线引擎时返回 null；按服务档位取对应一档的界面值） */
     private fun cloudConfig(): CloudTtsConfig? =
         if (ttsEngine.value == TtsEngine.CLOUD) {
-            CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+            if (ttsCloudProvider.value == TtsCloudProvider.ELEVEN) {
+                CloudTtsConfig(TtsElevenDefaults.BASE_URL, ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value, TtsCloudProvider.ELEVEN)
+            } else {
+                CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+            }
         } else null
 
     fun setMinInterval(ms: Long) {
