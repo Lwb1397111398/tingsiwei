@@ -60,16 +60,20 @@ class TtsPlayer(
 
     var onStateChange: (() -> Unit)? = null
 
-    /** engine 取 data.TtsEngine 的常量（"system" / "local" / "cloud"）；cloud 引擎需传 [cloud] 配置 */
-    fun speak(text: String, rate: Float, engine: String, cloud: CloudTtsConfig? = null) {
+    /**
+     * engine 取 data.TtsEngine 的常量（"system" / "local" / "cloud"）；cloud 引擎需传 [cloud] 配置。
+     * [fallback]：在线朗读失败时是否自动换离线/系统引擎读完（朗读正文默认要；设置页试听传 false，
+     * 失败只报准确原因，不静默换成别的声音——否则用户不知道在线到底通没通）。
+     */
+    fun speak(text: String, rate: Float, engine: String, cloud: CloudTtsConfig? = null, fallback: Boolean = true) {
         stop()
         liveRate = rate
         when (engine) {
             TtsEngine.CLOUD -> {
-                if (cloud == null || cloud.apiKey.isBlank()) {
+                if (cloud == null || cloud.key.isBlank()) {
                     onMessage?.invoke("还没配置在线朗读：到设置页「朗读」里填语音服务的 API Key")
                 } else {
-                    speakCloud(text, cloud)
+                    speakCloud(text, cloud, fallback)
                 }
             }
             TtsEngine.LOCAL -> {
@@ -351,7 +355,7 @@ class TtsPlayer(
      * 缓冲给足约 10 秒：一句写完时缓冲里还压着没播的量，足够盖住下一句的网络往返，句间不出缝。
      * 每句请求前取一次 liveRate，朗读中拖调速条下一句生效。
      */
-    private fun speakCloud(text: String, cfg: CloudTtsConfig) {
+    private fun speakCloud(text: String, cfg: CloudTtsConfig, fallback: Boolean) {
         playing.set(true)
         onStateChange?.invoke()
         localJob = scope.launch {
@@ -415,6 +419,13 @@ class TtsPlayer(
                 this@TtsPlayer.track = null
             }
             if (cloudError != null) {
+                // 试听场景（fallback=false）：失败只报准确原因，不静默换成别的声音——试听就是要验证在线通不通
+                if (!fallback) {
+                    playing.set(false)
+                    onStateChange?.invoke()
+                    onMessage?.invoke("在线朗读失败：$cloudError")
+                    return@launch
+                }
                 // 失败不空手：退回离线/系统引擎把这次读完（对齐离线模型缺下载时的回落惯例），消息里明说原因
                 val tail = when {
                     ModelManager.isTtsReady(appCtx) -> {
@@ -422,7 +433,12 @@ class TtsPlayer(
                         "，本次先用离线模型"
                     }
                     speakSystemOrQueue(text, liveRate) -> "，本次先用系统语音"
-                    else -> "，且本机没有可用的离线或系统语音"
+                    else -> {
+                        // 回落也没处落：把播放态收掉，别让 isSpeaking 卡在 true（试听循环会空转）
+                        playing.set(false)
+                        onStateChange?.invoke()
+                        "，且本机没有可用的离线或系统语音"
+                    }
                 }
                 onMessage?.invoke("在线朗读失败：$cloudError$tail")
                 return@launch

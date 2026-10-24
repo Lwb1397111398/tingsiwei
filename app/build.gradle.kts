@@ -76,6 +76,10 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    testOptions {
+        // CloudTts 在 JVM 单测里调 android.util.Log 记排查日志：让 stub 返回默认值而不是抛「not mocked」
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

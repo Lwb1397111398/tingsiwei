@@ -52,10 +52,11 @@ data class AppSettings(
     val llmStagedThinking: Boolean = false,
     /** 朗读引擎：系统 TTS / 本地离线模型 / 在线大模型 */
     val ttsEngine: String = TtsEngine.SYSTEM,
-    /** 在线朗读三件套：接口地址、API Key、音色（模型固定走 TtsCloudDefaults.MODEL） */
+    /** 在线朗读四件套：接口地址、API Key、音色、模型（模型可手填或「检索模型」点选，不局限于某一家） */
     val ttsCloudUrl: String = TtsCloudDefaults.BASE_URL,
     val ttsCloudKey: String = "",
     val ttsCloudVoice: String = TtsCloudDefaults.VOICE,
+    val ttsCloudModel: String = TtsCloudDefaults.MODEL,
     /** 最近一次成功生成导图用的模型名；换模型后失败时用来提示用户切回去 */
     val lastGoodModel: String? = null,
     /** 是否已保存 GitHub 只读令牌（应用自更新用；令牌明文不放进本对象，单独按需读取） */
@@ -83,6 +84,7 @@ class SettingsRepository(private val context: Context) {
         val ttsCloudUrl = stringPreferencesKey("tts_cloud_url")
         val ttsCloudKey = stringPreferencesKey("tts_cloud_key")
         val ttsCloudVoice = stringPreferencesKey("tts_cloud_voice")
+        val ttsCloudModel = stringPreferencesKey("tts_cloud_model")
         val lastGoodModel = stringPreferencesKey("last_good_model")
 
         // ---- 应用自更新 ----
@@ -111,6 +113,7 @@ class SettingsRepository(private val context: Context) {
             ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
             ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
             ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
+            ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -146,6 +149,7 @@ class SettingsRepository(private val context: Context) {
             ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
             ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
             ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
+            ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
             lastGoodModel = p[K.lastGoodModel],
             hasGithubToken = p[K.githubToken] != null,
             updateAutoCheck = p[K.updateAutoCheck] != false,
@@ -189,11 +193,12 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[K.ttsEngine] = engine }
     }
 
-    suspend fun setTtsCloud(url: String, key: String, voice: String) {
+    suspend fun setTtsCloud(url: String, key: String, voice: String, model: String) {
         context.dataStore.edit { p ->
             p[K.ttsCloudUrl] = url.trim()
             p[K.ttsCloudKey] = key.trim()
             p[K.ttsCloudVoice] = voice.trim()
+            p[K.ttsCloudModel] = model.trim()
         }
     }
 

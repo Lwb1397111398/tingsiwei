@@ -63,10 +63,13 @@ import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
 import com.tingsiwei.app.tts.CloudTts
 import com.tingsiwei.app.tts.CloudTtsConfig
+import com.tingsiwei.app.tts.OkHttpCloudTtsTransport
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.util.Formatters
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -84,6 +87,10 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val ttsCloudUrl by vm.ttsCloudUrl.collectAsState()
     val ttsCloudKey by vm.ttsCloudKey.collectAsState()
     val ttsCloudVoice by vm.ttsCloudVoice.collectAsState()
+    val ttsCloudModel by vm.ttsCloudModel.collectAsState()
+    val ttsModels by vm.ttsModels.collectAsState()
+    val ttsModelsAll by vm.ttsModelsAll.collectAsState()
+    val ttsBusy by vm.ttsBusy.collectAsState()
     val ttsModelState by vm.ttsModelState.collectAsState()
     val previewSpeaking by vm.previewSpeaking.collectAsState()
     val contextWindow by vm.contextWindow.collectAsState()
@@ -377,40 +384,93 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         OutlinedTextField(
                             value = ttsCloudUrl,
                             onValueChange = { vm.setTtsCloudUrl(it) },
-                            label = { Text("语音服务地址（默认硅基流动）") },
+                            label = { Text("语音服务地址（默认硅基流动，其他 OpenAI 兼容渠道也可以）") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
                         )
                         OutlinedTextField(
                             value = ttsCloudKey,
                             onValueChange = { vm.setTtsCloudKey(it) },
-                            label = { Text("API Key（siliconflow.cn 注册免费领）") },
+                            label = { Text("API Key（渠道注册领取）") },
                             placeholder = { Text("sk-…") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
                         )
-                        Box {
-                            var voiceMenuOpen by remember { mutableStateOf(false) }
-                            OutlinedButton(onClick = { voiceMenuOpen = true }) {
-                                Text("音色：${CloudTts.voiceLabel(ttsCloudVoice)}")
-                            }
-                            DropdownMenu(expanded = voiceMenuOpen, onDismissRequest = { voiceMenuOpen = false }) {
-                                CloudTts.VOICES.forEach { (name, label) ->
-                                    DropdownMenuItem(
-                                        text = { Text(label) },
+                        OutlinedTextField(
+                            value = ttsCloudModel,
+                            onValueChange = { vm.setTtsCloudModel(it) },
+                            label = { Text("朗读模型（可手填，或点「检索模型」选）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                        if (ttsModels.isNotEmpty()) {
+                            // 检索到的模型直接平铺展示，点选即用；仍可手填
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ttsModels.forEach { m ->
+                                    FilterChip(
+                                        selected = ttsCloudModel == m,
                                         onClick = {
-                                            vm.setTtsCloudVoice(CloudTts.voiceId(name))
-                                            voiceMenuOpen = false
+                                            vm.setTtsCloudModel(m)
+                                            keyboard?.hide()
                                         },
+                                        label = { Text(m, style = MaterialTheme.typography.bodySmall) },
+                                    )
+                                }
+                            }
+                            if (ttsModelsAll) {
+                                Text(
+                                    "没筛出明确的语音模型，以上是全部模型——点选后点下面「试听当前引擎」验证能不能出声",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(onClick = { vm.fetchTtsModels() }, enabled = !ttsBusy) {
+                                Text("检索模型")
+                            }
+                            if (ttsBusy) {
+                                CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                Text("检索中…", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        OutlinedTextField(
+                            value = ttsCloudVoice,
+                            onValueChange = { vm.setTtsCloudVoice(it) },
+                            label = { Text("音色（可手填）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                        val voicePresets = CloudTts.voicePresetsFor(ttsCloudModel)
+                        if (voicePresets.isNotEmpty()) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                voicePresets.forEach { (name, label) ->
+                                    FilterChip(
+                                        selected = ttsCloudVoice == name || ttsCloudVoice == CloudTts.voiceId(name),
+                                        onClick = { vm.setTtsCloudVoice(name) },
+                                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
                                     )
                                 }
                             }
                         }
                         Text(
-                            "用 CosyVoice2 语音大模型，联网时边生成边播，断句与人味都明显更好；模型当前免费，走手机流量。出错会自动先用离线/系统语音并提示原因",
+                            "任何 OpenAI 兼容渠道都能用：填好地址和 Key 点「检索模型」，筛出语音类模型点选即用。" +
+                                "换模型后音色可能要换（CosyVoice 点上面音色片，OpenAI 式模型手填 alloy 等），" +
+                                "选完点「试听当前引擎」验证。联网时边生成边播；朗读正文出错会自动先用离线/系统语音并提示原因",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (ttsCloudKey.isNotBlank()) {
+                        // 最常见的「填了没反应」：配置都在，引擎却没切过来
+                        Text(
+                            "已填写在线朗读的 Key，但当前引擎不是「在线朗读」——要用它的声音，点选上面的「在线朗读」",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
                     }
                     OutlinedButton(onClick = { vm.togglePreview() }) {
@@ -518,6 +578,11 @@ class SettingsViewModel : ViewModel() {
     val ttsCloudUrl = MutableStateFlow(TtsCloudDefaults.BASE_URL)
     val ttsCloudKey = MutableStateFlow("")
     val ttsCloudVoice = MutableStateFlow(TtsCloudDefaults.VOICE)
+    val ttsCloudModel = MutableStateFlow(TtsCloudDefaults.MODEL)
+    val ttsModels = MutableStateFlow<List<String>>(emptyList())
+    /** 检索结果里没筛出明确的语音模型时展示了全部模型，提示用户点选后试听验证 */
+    val ttsModelsAll = MutableStateFlow(false)
+    val ttsBusy = MutableStateFlow(false)
     val ttsModelState = MutableStateFlow(TtsModelStateUi())
     val previewSpeaking = MutableStateFlow(false)
     val contextWindow = MutableStateFlow(LlmPolicy.DEFAULT_CONTEXT_WINDOW)
@@ -541,6 +606,7 @@ class SettingsViewModel : ViewModel() {
             ttsCloudUrl.value = s.ttsCloudUrl
             ttsCloudKey.value = s.ttsCloudKey
             ttsCloudVoice.value = s.ttsCloudVoice
+            ttsCloudModel.value = s.ttsCloudModel
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
@@ -646,8 +712,46 @@ class SettingsViewModel : ViewModel() {
         persistTtsCloud()
     }
 
+    fun setTtsCloudModel(m: String) {
+        ttsCloudModel.value = m
+        persistTtsCloud()
+    }
+
     private fun persistTtsCloud() {
-        viewModelScope.launch { repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value) }
+        viewModelScope.launch {
+            repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+        }
+    }
+
+    /** 检索在线朗读渠道的可用模型：先存界面当前值，再 GET /models，筛出语音类模型列成点选 chips */
+    fun fetchTtsModels() {
+        if (ttsBusy.value) return
+        viewModelScope.launch {
+            ttsBusy.value = true
+            try {
+                // 先保存当前填写内容，检索用的就是界面上的地址和 Key
+                repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+                // 网络必须切 IO 线程（对齐 LlmClient.listModels 的做法，主线程发请求会直接抛异常）
+                val all = withContext(Dispatchers.IO) {
+                    CloudTts(
+                        OkHttpCloudTtsTransport,
+                        CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, "", ttsCloudModel.value),
+                    ).fetchModels()
+                }
+                val filtered = CloudTts.filterTtsModels(all)
+                ttsModels.value = filtered.ifEmpty { all }
+                ttsModelsAll.value = filtered.isEmpty() && all.isNotEmpty()
+                message.value = when {
+                    all.isEmpty() -> "没有获取到模型，可手动填写模型名"
+                    filtered.isEmpty() -> "这个渠道没标出明确的语音模型，全部 ${all.size} 个已列出——点选或手填，选完试听验证"
+                    else -> "筛出 ${filtered.size} 个语音类模型（渠道共 ${all.size} 个），点选即可"
+                }
+            } catch (e: Exception) {
+                message.value = e.message ?: "检索模型失败"
+            } finally {
+                ttsBusy.value = false
+            }
+        }
     }
 
     fun refreshTtsModelState() {
@@ -721,6 +825,8 @@ class SettingsViewModel : ViewModel() {
                 ttsRate.value,
                 ttsEngine.value,
                 cloudConfig(),
+                // 试听在线引擎时不要静默回落：失败直接报准确原因，试听就是要验证在线通不通
+                fallback = ttsEngine.value != TtsEngine.CLOUD,
             )
             previewSpeaking.value = true
             while (previewTts.isSpeaking) kotlinx.coroutines.delay(300)
@@ -731,7 +837,7 @@ class SettingsViewModel : ViewModel() {
     /** 在线引擎需要的配置从当前填写值组装（未选在线引擎时返回 null） */
     private fun cloudConfig(): CloudTtsConfig? =
         if (ttsEngine.value == TtsEngine.CLOUD) {
-            CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value)
+            CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
         } else null
 
     fun setMinInterval(ms: Long) {

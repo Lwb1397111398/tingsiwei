@@ -643,7 +643,7 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
             } else {
                 val s = settingsRepo.current()
                 val cloud = if (s.ttsEngine == TtsEngine.CLOUD) {
-                    CloudTtsConfig(s.ttsCloudUrl, s.ttsCloudKey, s.ttsCloudVoice)
+                    CloudTtsConfig(s.ttsCloudUrl, s.ttsCloudKey, s.ttsCloudVoice, s.ttsCloudModel)
                 } else null
                 tts.speak(text, ttsRate.value, s.ttsEngine, cloud)
                 ttsSpeaking.value = true
