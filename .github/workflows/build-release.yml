@@ -40,6 +40,12 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # 发版闸门：单测红了就不构建不发布，坏包不会推到手机上「检查更新」
+      - name: 单元测试
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon
+
       - name: 构建 Release APK
         run: |
           chmod +x gradlew

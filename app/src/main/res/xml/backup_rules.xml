@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 及以下的自动云备份规则（allowBackup 的老协议）。
+    排除整个 DataStore 目录：settings.preferences_pb 里有 llm_key / tts_cloud_key /
+    tts_eleven_key / github_token 明文（见数据层模块总览键位表），不随备份上传。
+    代价：恢复备份后所有设置（地址/模型/语速等）需重填；笔记在 databases/，不受影响。
+-->
+<full-backup-content>
+    <exclude domain="file" path="datastore" />
+</full-backup-content>

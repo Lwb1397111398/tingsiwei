@@ -106,3 +106,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }
+
+// Room schema 快照导出位置：exportSchema=true 时每次构建把当前表结构写成
+// app/schemas/<库名>/<version>.json 入库，升版本时能 diff 出表结构改了什么。
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}

@@ -54,7 +54,10 @@ interface VersionDao {
     suspend fun delete(version: VersionEntity)
 }
 
-@Database(entities = [NoteEntity::class, VersionEntity::class], version = 1, exportSchema = false)
+// exportSchema=true：每次升版本在 app/schemas/ 生成 JSON 快照入库，表结构改动可 diff。
+// 铁律：升 version 必须同步写 Migration 并加进 addMigrations——没有破坏性回退，
+// 忘写迁移会在启动时直接抛异常（宁可崩在明处，不可静默清空用户全部笔记）。
+@Database(entities = [NoteEntity::class, VersionEntity::class], version = 1, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun versionDao(): VersionDao
@@ -62,7 +65,8 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "tingsiwei.db")
-                .fallbackToDestructiveMigration()
+                // 2026-10-25 移除 fallbackToDestructiveMigration：升版本不再静默清库。
+                // version 仍是 1、尚无迁移；首次升版本时必须配 MIGRATION_1_2 挂到这里。
                 .build()
     }
 }

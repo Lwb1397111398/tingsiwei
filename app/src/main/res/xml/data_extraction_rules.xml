@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+ 的备份/迁移规则（dataExtractionRules）。
+    cloud-backup=Google 云备份，device-transfer=换机直传：两条通道都排除整个 DataStore
+    目录，settings.preferences_pb 里的明文 Key（llm_key / tts_cloud_key / tts_eleven_key /
+    github_token）不外流。代价与 backup_rules 相同：新机上设置需重填，笔记不受影响。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore" />
+    </device-transfer>
+</data-extraction-rules>

@@ -37,6 +37,9 @@ object NoteProcessor {
 
     fun isBusy(noteId: Long): Boolean = jobs[noteId]?.isActive == true
 
+    /** 是否还有任何活跃任务：ProcessingService 以此判断能否收摊（stages 更新晚于任务注册，单看它会误停） */
+    fun anyBusy(): Boolean = jobs.values.any { it.isActive }
+
     /**
      * 幂等启动：同笔记已有任务在跑就忽略并返回 false。
      * 之所以收在这里而不是 ViewModel：任务的生命周期必须长于页面。
@@ -58,6 +61,11 @@ object NoteProcessor {
                 }
             }
             jobs[noteId] = job
+            // 先占一个阶段再拉服务：ProcessingService 启动即收 stages 流，空表会误判“没活”而自杀
+            setStage(noteId, "正在准备…")
+            // 挂前台服务保活：锁屏/退后台时系统不回收进程，通知栏同步阶段进度；
+            // stages 清空后服务自行 stopSelf（见 ProcessingService）
+            ProcessingService.ensureRunning(App.get())
             return true
         }
     }
