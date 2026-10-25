@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "3c96db786b6dce4314d60fd0e5911ebb4709cef8",
-    "note": "SettingsScreen.kt 本次改动全在朗读卡（在线模型/检索/音色chips），不触应用更新卡",
-    "acked_at": "2026-10-24 14:46:04"
+    "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
+    "note": "本次仅重排设置页更新卡的视觉与控件样式，UpdateChecker/UpdateInstaller/UpdateViewModel/CI 链路零改动",
+    "acked_at": "2026-10-25 16:03:59"
    }
   },
   "转写模式选择模块总览.md": {
@@ -14,14 +14,26 @@
     "acked_at": "2026-10-25 14:31:39"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "5fa142cc1a7f890a6849f0c10ed4d27aebb8a96f",
-    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
-    "acked_at": "2026-10-25 14:31:39"
+    "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
+    "note": "本次仅重排设置页单选行与录音页视觉，TranscribeMode 定义、默认值 OFFLINE、两处读盘逻辑与 setMode 调用链零改动",
+    "acked_at": "2026-10-25 16:03:59"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "ed37b63cfb367158f6c5bab7aab13a306aa2db75",
     "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
     "acked_at": "2026-10-25 14:31:39"
+   },
+   "app/src/main/java/com/tingsiwei/app/ui/RecordScreen.kt": {
+    "sha1": "7b4d2b5f5ceaa4506a56881f6647f5e4defe5240",
+    "note": "本次仅重排设置页单选行与录音页视觉，TranscribeMode 定义、默认值 OFFLINE、两处读盘逻辑与 setMode 调用链零改动",
+    "acked_at": "2026-10-25 16:03:59"
+   }
+  },
+  "设置页模块总览.md": {
+   "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
+    "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
+    "note": "本模块总览已在同一次提交中更新（最后更新条目记录了控件重排与新 SettingsParts.kt）",
+    "acked_at": "2026-10-25 16:03:59"
    }
   }
  }
