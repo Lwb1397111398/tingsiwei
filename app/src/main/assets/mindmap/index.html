@@ -8,39 +8,75 @@
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: transparent; }
   #map { height: 100%; width: 100%; }
+
+  /* 工具栏配色由 appSetColors 注入（原生与画布同一套设计令牌），下面是浅色兜底，
+     避免注入前那一帧闪成深色 */
+  :root {
+    --tb-bg: rgba(255,255,255,.96);
+    --tb-fg: #18252A;
+    --tb-border: rgba(24,37,42,.10);
+    --tb-shadow: rgba(24,37,42,.12);
+    --tb-active: rgba(9,104,104,.12);
+  }
+
   #toolbar {
     position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-    display: flex; gap: 2px; background: rgba(28,28,34,.92); border-radius: 22px;
-    padding: 6px 8px; box-shadow: 0 4px 16px rgba(0,0,0,.3); z-index: 9999;
+    display: flex; flex-direction: column; gap: 3px;
+    /* 半透明 + 细边框：浮在导图上像一层玻璃托盘，不显得是一块压在内容上的黑砖 */
+    background: var(--tb-bg); border-radius: 18px;
+    padding: 5px 6px;
+    box-shadow: 0 10px 30px var(--tb-shadow);
+    border: 1px solid var(--tb-border);
+    z-index: 9999;
     /* 固定定位下 shrink-to-fit 只有 left 到右缘的宽度，会过窄换行，显式给宽度 */
-    width: max-content; max-width: 96vw;
-    flex-wrap: wrap; justify-content: center;
+    width: max-content; max-width: 94vw;
   }
+  .tb-row { display: flex; gap: 1px; justify-content: center; }
+  .tb-sep { height: 1px; margin: 1px 6px; background: var(--tb-border); }
   #toolbar button {
-    border: none; background: transparent; color: #fff; font-size: 13px;
-    min-width: 38px; height: 34px; border-radius: 10px; padding: 0 4px;
-    font-family: sans-serif;
+    border: none; background: transparent; color: var(--tb-fg); font-size: 12.5px;
+    min-width: 40px; height: 32px; border-radius: 9px; padding: 0 6px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", system-ui, sans-serif;
   }
-  #toolbar button:active { background: rgba(255,255,255,.18); }
-  #toolbar button:disabled { opacity: .3; }
+  #toolbar button:active { background: var(--tb-active); }
+  #toolbar button:disabled { opacity: .26; }
+
+  /* 深色下把展开/收起按钮的图片图标反色，融进深色画布 */
+  body.dark me-parent me-epd { filter: invert(1) brightness(1.6); }
+
+  /* 节点排版：中文行距与圆角，和 App 其他页面的观感统一。
+     根节点字号从 25px 收到 19px——长标题在手机上 25px 会占满半屏 */
+  me-tpc { line-height: 1.55; }
+  me-root me-tpc { font-size: 19px !important; font-weight: 600; letter-spacing: .2px;
+    padding: 9px 22px !important; }
+  me-main > me-wrapper > me-parent > me-tpc { font-weight: 500; }
+  me-main > me-wrapper > me-parent > me-tpc,
+  me-children me-parent > me-tpc { padding: 4px 6px !important; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="toolbar">
-  <button id="btChild">＋子</button>
-  <button id="btSibling">＋同</button>
-  <button id="btEdit">改名</button>
-  <button id="btDel">删除</button>
-  <button id="btUp">↑</button>
-  <button id="btDown">↓</button>
-  <button id="btUndo">撤销</button>
-  <button id="btRedo">重做</button>
-  <button id="btCenter">居中</button>
-  <button id="btZoomOut">－</button>
-  <button id="btZoomIn">＋</button>
-  <button id="btFit">适应</button>
-  <button id="btReset">1:1</button>
+  <!-- 两行分组：上行改结构，下行改视图。原来 13 个按钮挤一行，手机上要换行且分不清哪组是哪组 -->
+  <div class="tb-row">
+    <button id="btChild">＋子节点</button>
+    <button id="btSibling">＋同级</button>
+    <button id="btEdit">改名</button>
+    <button id="btDel">删除</button>
+    <button id="btUp">↑</button>
+    <button id="btDown">↓</button>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-row">
+    <button id="btUndo">撤销</button>
+    <button id="btRedo">重做</button>
+    <button id="btZoomOut">－</button>
+    <button id="btZoomIn">＋</button>
+    <button id="btFit">适应</button>
+    <button id="btReset">1:1</button>
+    <button id="btCenter">居中</button>
+  </div>
 </div>
 <script src="MindElixirFull.iife.js"></script>
 <script>
@@ -48,6 +84,8 @@ var ME = MECore.default;
 var mind = null;
 var dark = false;
 var saveTimer = null;
+// 「适应屏幕」的最小缩放：再小字就看不清了，宁可让用户平移。0.45 ≈ 正文 6px 的临界
+var MIN_FIT = 0.4;
 
 // 不依赖 CSS 高度百分比链（部分 WebView 上 body{height:100%} 不生效），全部用像素钉死
 function fixSize() {
@@ -94,11 +132,47 @@ function scheduleSave() {
 }
 
 function applyDark() {
+  document.body.classList.toggle('dark', dark);
+  applyToolbarVars();
   if (!mind) return;
   try {
-    mind.changeTheme(dark ? ME.DARK_THEME : ME.THEME, true);
+    mind.changeTheme(currentTheme(), true);
   } catch (e) { console.error(e); }
 }
+
+/** 工具栏的 CSS 变量跟着深浅色走；画布还没建时也要生效（首帧不闪色） */
+function applyToolbarVars() {
+  var t = dark ? themeDark : themeLight;
+  if (!t || !t.toolbar) return;
+  var root = document.documentElement.style;
+  Object.keys(t.toolbar).forEach(function (k) { root.setProperty(k, t.toolbar[k]); });
+}
+
+/**
+ * 画布主题：不再用 mind-elixir 自带的 Latte/Dark，改用与 App 同一套设计令牌。
+ * 传入的是原生合成的完整主题对象（含 palette / cssVar / type），JS 只负责换上去。
+ */
+var themeLight = null;
+var themeDark = null;
+
+function currentTheme() {
+  var t = dark ? themeDark : themeLight;
+  if (t) return t;
+  // 原生还没注入时先退回内置主题，保证首帧不白屏
+  return dark ? ME.DARK_THEME : ME.THEME;
+}
+
+/** 原生侧注入配色（App 启动 / 切换深色时调用） */
+window.appSetColors = function (lightJson, darkJson) {
+  try {
+    themeLight = JSON.parse(lightJson);
+    themeDark = JSON.parse(darkJson);
+  } catch (e) {
+    console.log('appSetColors bad json: ' + e);
+    return;
+  }
+  applyDark();
+};
 
 window.appInit = function (jsonText, darkMode) {
   console.log('appInit called, len=' + (jsonText || '').length);
@@ -125,6 +199,7 @@ window.appInit = function (jsonText, darkMode) {
       scaleMax: 3,
       scaleMin: 0.15,
       scaleSensitivity: 0.2,
+      theme: currentTheme(),
       before: {},
     };
     mind = new ME(opts);
@@ -132,6 +207,15 @@ window.appInit = function (jsonText, darkMode) {
     try { mind.install(ME.operationHistory); } catch (e) { console.log('install history fail: ' + e); }
     var err = mind.init(data);
     console.log('init result: ' + err);
+    // 首次打开自动适应屏幕：否则大图会停在左上角，用户得自己捏合缩放才看得见全貌。
+    // 但整图缩放到超过「字看不清」就没意义了——低于 MIN_FIT 就停在 MIN_FIT，宁可让用户平移
+    setTimeout(function () {
+      try {
+        mind.scaleFit();
+        if (mind.scaleVal < MIN_FIT) mind.scale(MIN_FIT);
+        mind.toCenter();
+      } catch (e) {}
+    }, 80);
     if (dark) applyDark();
     try {
       mind.bus.addListener('operation', function () { scheduleSave(); updateButtons(); });
@@ -182,6 +266,7 @@ window.appZoomOut = function () {
   if (!mind) return;
   try { mind.scale(Math.max(mind.scaleMin, mind.scaleVal - mind.scaleSensitivity)); } catch (e) {}
 };
+// 「适应」按钮是用户主动要求看全貌，不加最小缩放限制（首次打开才加，见 appInit）
 window.appZoomFit = function () {
   if (!mind) return;
   try { mind.scaleFit(); mind.toCenter(); } catch (e) {}

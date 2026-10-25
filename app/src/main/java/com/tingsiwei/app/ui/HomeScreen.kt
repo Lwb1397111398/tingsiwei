@@ -5,36 +5,47 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,7 +53,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,16 +63,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
-import com.tingsiwei.app.llm.SegmentStore
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
+import com.tingsiwei.app.llm.SegmentStore
 import com.tingsiwei.app.pipeline.NoteProcessor
+import com.tingsiwei.app.ui.components.EmptyState
+import com.tingsiwei.app.ui.components.StatusDot
+import com.tingsiwei.app.ui.components.StatusPill
+import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,9 +90,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -88,14 +111,14 @@ fun HomeScreen(
     val stages by NoteProcessor.stages.collectAsState()
     val snackbar = remember { SnackbarHostState() }
 
-    var fabOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<NoteEntity?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importAudio(uri)
     }
 
-    androidx.compose.runtime.LaunchedEffect(message) {
+    LaunchedEffect(message) {
         message?.let {
             snackbar.showSnackbar(it)
             vm.message.value = null
@@ -103,73 +126,139 @@ fun HomeScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("听的思维") },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, "设置")
+                title = {
+                    Column {
+                        Text(
+                            "听的思维",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            if (notes.isEmpty()) "把听到的，变成看懂的" else "${notes.size} 条笔记",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, "设置", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
-            Box {
-                FloatingActionButton(onClick = { fabOpen = !fabOpen }) {
-                    Icon(Icons.Filled.Add, "新建")
+            Column(horizontalAlignment = Alignment.End) {
+                // 展开态：三个动作竖排在主按钮上方，每个都带文字，不用猜图标意思
+                AnimatedVisibility(
+                    visible = menuOpen,
+                    enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = 0.9f),
+                    exit = fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.9f),
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        NewActionPill(
+                            icon = Icons.Filled.Mic,
+                            label = "开始录音",
+                            onClick = { menuOpen = false; onOpenRecord() },
+                        )
+                        NewActionPill(
+                            icon = Icons.Filled.GraphicEq,
+                            label = "导入音频文件",
+                            onClick = { menuOpen = false; importLauncher.launch(arrayOf("audio/*")) },
+                        )
+                        NewActionPill(
+                            icon = Icons.Filled.Edit,
+                            label = "输入文字 / 粘贴导图",
+                            onClick = { menuOpen = false; onOpenTextInput() },
+                        )
+                        Spacer(Modifier.height(2.dp))
+                    }
                 }
-                DropdownMenu(expanded = fabOpen, onDismissRequest = { fabOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("开始录音") },
-                        leadingIcon = { Icon(Icons.Filled.Mic, null) },
-                        onClick = { fabOpen = false; onOpenRecord() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("导入音频文件") },
-                        leadingIcon = { Icon(Icons.Filled.GraphicEq, null) },
-                        onClick = {
-                            fabOpen = false
-                            importLauncher.launch(arrayOf("audio/*"))
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("输入文字 / 粘贴导图") },
-                        leadingIcon = { Icon(Icons.Filled.Edit, null) },
-                        onClick = { fabOpen = false; onOpenTextInput() },
-                    )
+                Spacer(Modifier.height(Spacing.md))
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 6.dp,
+                ) {
+                    IconButton(
+                        onClick = { menuOpen = !menuOpen },
+                        modifier = Modifier.size(60.dp),
+                    ) {
+                        Icon(
+                            if (menuOpen) Icons.Filled.Close else Icons.Filled.Add,
+                            contentDescription = if (menuOpen) "收起" else "新建",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                 }
             }
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { vm.query.value = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("搜索标题或原文") },
-                leadingIcon = { Icon(Icons.Filled.Search, null) },
-                singleLine = true,
+            SearchField(
+                query = query,
+                onQueryChange = { vm.query.value = it },
+                modifier = Modifier.padding(horizontal = Spacing.screen, vertical = Spacing.sm),
             )
-            if (notes.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "点右下角 + 开始：\n录上课 / 聊天 / 面试，自动变成思维导图和记忆思路",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
-                    items(notes.size) { i ->
-                        val note = notes[i]
-                        NoteCard(
-                            note = note,
-                            stage = stages[note.id],
-                            onClick = { onOpenNote(note.id) },
-                            onLongClick = { pendingDelete = note },
+            when {
+                notes.isEmpty() && query.isBlank() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        EmptyState(
+                            icon = Icons.Outlined.AutoStories,
+                            title = "还没有笔记",
+                            description = "录一段上课、聊天或面试，\n自动变成思维导图和一段帮你记忆的思路。",
+                            action = {
+                                FilledTonalButton(onClick = onOpenRecord) {
+                                    Icon(Icons.Filled.Mic, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("录第一条")
+                                }
+                            },
                         )
-                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+                notes.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "没有找到「$query」相关的笔记",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                else -> {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = Spacing.screen,
+                            end = Spacing.screen,
+                            top = Spacing.sm,
+                            // 底部留出浮动按钮展开后的高度，最后一条笔记不会被挡住
+                            bottom = 150.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        items(notes.size) { i ->
+                            val note = notes[i]
+                            NoteCard(
+                                note = note,
+                                stage = stages[note.id],
+                                onClick = { onOpenNote(note.id) },
+                                onLongClick = { pendingDelete = note },
+                            )
+                        }
                     }
                 }
             }
@@ -182,7 +271,9 @@ fun HomeScreen(
             title = { Text("删除这条笔记？") },
             text = { Text("「${note.title}」和它的录音会一起删除，版本历史也会删除，不可恢复。") },
             confirmButton = {
-                TextButton(onClick = { vm.delete(note); pendingDelete = null }) { Text("删除") }
+                TextButton(onClick = { vm.delete(note); pendingDelete = null }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("取消") }
@@ -191,73 +282,272 @@ fun HomeScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/** 搜索框：自绘圆角容器，不用 OutlinedTextField 那圈描边（在浅底上太重）。 */
 @Composable
-private fun NoteCard(note: NoteEntity, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    note.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                )
-                StatusChip(note.status)
-            }
-            Spacer(Modifier.height(4.dp))
-            val preview = note.thinking ?: note.content ?: "（还没有内容）"
-            Text(
-                preview,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+private fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = Spacing.lg, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
             )
-            Spacer(Modifier.height(4.dp))
-            Row {
-                Text(
-                    Formatters.dateTime(note.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (note.durationMs > 0) {
-                    Spacer(Modifier.width(12.dp))
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
                     Text(
-                        "时长 ${Formatters.duration(note.durationMs)}",
-                        style = MaterialTheme.typography.labelSmall,
+                        "搜索标题或原文",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = Spacing.md, vertical = 12.dp),
                     )
                 }
-            }
-            if (stage != null && (note.status == NoteStatus.TRANSCRIBING || note.status == NoteStatus.GENERATING)) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    stage,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.md, vertical = 12.dp),
                 )
+            }
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        "清除",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            } else {
+                Spacer(Modifier.width(Spacing.md))
             }
         }
     }
 }
 
+/** 新建入口的「药丸」按钮：图标 + 文字，浮在主按钮上方。 */
+@Composable
+private fun NewActionPill(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                icon,
+                null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(Spacing.md))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NoteCard(note: NoteEntity, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val busy = note.status == NoteStatus.TRANSCRIBING || note.status == NoteStatus.GENERATING
+    Surface(
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shadowElevation = 1.dp,
+    ) {
+        Row(Modifier.padding(Spacing.lg), verticalAlignment = Alignment.Top) {
+            // 左侧来源标记：一眼区分录音 / 导入 / 手输
+            SourceMark(source = note.source)
+            Spacer(Modifier.width(Spacing.md))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        note.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    StatusChip(note.status)
+                }
+                val preview = (note.thinking ?: note.content)?.trim().orEmpty()
+                if (preview.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        preview.replace('\n', ' '),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(Spacing.sm))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        relativeTime(note.updatedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (note.durationMs > 0) {
+                        Text(
+                            "  ·  ${Formatters.duration(note.durationMs)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                // 进度行：真实阶段文案来自 NoteProcessor，不是假进度
+                if (busy && !stage.isNullOrBlank()) {
+                    Spacer(Modifier.height(Spacing.sm))
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            StatusDot(MaterialTheme.colorScheme.primary, size = 6.dp)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                stage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 来源标记方块：录音=麦克风、导入=声波、手输=笔。 */
+@Composable
+private fun SourceMark(source: String) {
+    val (icon, tint, bg) = when (source) {
+        NoteSource.RECORD -> Triple(
+            Icons.Filled.Mic,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            MaterialTheme.colorScheme.primaryContainer,
+        )
+        NoteSource.IMPORT -> Triple(
+            Icons.Filled.GraphicEq,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            MaterialTheme.colorScheme.secondaryContainer,
+        )
+        else -> Triple(
+            Icons.Filled.Edit,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            MaterialTheme.colorScheme.tertiaryContainer,
+        )
+    }
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** 状态药丸：日常克制，只有出错才用红；进行中用琥珀色提示「在动」。 */
 @Composable
 fun StatusChip(status: String) {
-    val (label, color) = when (status) {
-        NoteStatus.READY -> "已完成" to MaterialTheme.colorScheme.primaryContainer
-        NoteStatus.GENERATING -> "生成中…" to MaterialTheme.colorScheme.secondaryContainer
-        NoteStatus.TRANSCRIBING -> "转写中…" to MaterialTheme.colorScheme.secondaryContainer
-        NoteStatus.DRAFT -> "待生成" to MaterialTheme.colorScheme.tertiaryContainer
-        NoteStatus.ERROR -> "出错" to MaterialTheme.colorScheme.errorContainer
-        else -> status to MaterialTheme.colorScheme.surfaceVariant
-    }
-    Surface(color = color, shape = MaterialTheme.shapes.small) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
+    val scheme = MaterialTheme.colorScheme
+    val style = when (status) {
+        NoteStatus.READY -> StatusStyle(
+            "已完成", scheme.primaryContainer, scheme.onPrimaryContainer, null,
         )
+        NoteStatus.GENERATING -> StatusStyle(
+            "生成中", scheme.tertiaryContainer, scheme.onTertiaryContainer, scheme.tertiary,
+        )
+        NoteStatus.TRANSCRIBING -> StatusStyle(
+            "转写中", scheme.tertiaryContainer, scheme.onTertiaryContainer, scheme.tertiary,
+        )
+        NoteStatus.DRAFT -> StatusStyle(
+            "待生成", scheme.secondaryContainer, scheme.onSecondaryContainer, null,
+        )
+        NoteStatus.ERROR -> StatusStyle(
+            "出错", scheme.errorContainer, scheme.onErrorContainer, null,
+        )
+        else -> StatusStyle(status, scheme.surfaceContainerHigh, scheme.onSurfaceVariant, null)
+    }
+    StatusPill(
+        text = style.label,
+        container = style.container,
+        content = style.content,
+        leadingDot = style.dot,
+    )
+}
+
+private data class StatusStyle(
+    val label: String,
+    val container: Color,
+    val content: Color,
+    val dot: Color?,
+)
+
+/**
+ * 相对时间：今天只给「HH:mm」，昨天给「昨天 HH:mm」，一周内给「周三」，更早给「9月29日」。
+ * 列表里满是「2026-09-29 09:21」既占地方又难扫。
+ */
+private fun relativeTime(ts: Long): String {
+    if (ts <= 0L) return ""
+    val cal = Calendar.getInstance().apply { timeInMillis = ts }
+    val today = Calendar.getInstance()
+    fun sameDay(a: Calendar, b: Calendar): Boolean =
+        a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+
+    val time = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(ts))
+    val yesterday = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
+    val diff = System.currentTimeMillis() - ts
+    return when {
+        sameDay(cal, today) -> time
+        sameDay(cal, yesterday) -> "昨天 $time"
+        diff in 0 until 7L * 24 * 3600 * 1000 -> {
+            val names = arrayOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")
+            names[cal.get(Calendar.DAY_OF_WEEK) - 1]
+        }
+        else -> SimpleDateFormat("M月d日", Locale.CHINA).format(Date(ts))
     }
 }
 

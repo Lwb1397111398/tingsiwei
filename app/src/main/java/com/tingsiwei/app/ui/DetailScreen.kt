@@ -1,10 +1,14 @@
 package com.tingsiwei.app.ui
 
 import android.media.MediaPlayer
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,36 +20,42 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,7 +66,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -64,6 +78,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
+import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.data.db.VersionEntity
 import com.tingsiwei.app.export.Exporter
@@ -72,8 +87,10 @@ import com.tingsiwei.app.mindmap.TreeText
 import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.TtsPlayer
+import com.tingsiwei.app.ui.components.EmptyState
 import com.tingsiwei.app.ui.components.MapController
 import com.tingsiwei.app.ui.components.MindMapPanel
+import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -108,9 +125,26 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(note?.title ?: "笔记", maxLines = 1) },
+                title = {
+                    Column {
+                        Text(
+                            note?.title ?: "笔记",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        note?.let {
+                            Text(
+                                subtitleFor(it),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
@@ -118,81 +152,58 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 },
                 actions = {
                     IconButton(onClick = { showVersions = true }, enabled = note?.mapJson != null) {
-                        Icon(Icons.Filled.History, "版本历史")
+                        Icon(Icons.Filled.History, "版本历史", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    TextButton(
+                    IconButton(
                         onClick = { vm.shareMarkdown() },
                         enabled = note?.mapJson != null,
-                    ) { Text("分享") }
+                    ) {
+                        Icon(Icons.Filled.Share, "分享", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(4.dp))
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         val n = note
         Column(modifier = Modifier.padding(pad).fillMaxSize()) {
-            // 状态条
+            // 状态提示条：三种情形（进行中 / 出错 / 完成但有提示）统一成一块，视觉上不再各写一版
             when {
                 n == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
                 n.status == NoteStatus.TRANSCRIBING || n.status == NoteStatus.GENERATING -> {
-                    Surface(tonalElevation = 2.dp) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Text(busyStage ?: "处理中…", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
+                    BusyBanner(text = busyStage ?: "处理中…")
                 }
                 n.status == NoteStatus.ERROR -> {
-                    Surface(tonalElevation = 2.dp) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "出错：${n.errorMsg ?: "未知"}",
-                                modifier = Modifier.weight(1f),
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            TextButton(onClick = { vm.retry() }) {
-                                Icon(Icons.Filled.Refresh, null)
-                                Text("重试")
-                            }
-                        }
-                    }
+                    MessageBanner(
+                        text = n.errorMsg?.let { "出错：$it" } ?: "出错：未知原因",
+                        actionLabel = "重试",
+                        onAction = { vm.retry() },
+                        tone = BannerTone.Error,
+                    )
                 }
                 n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() -> {
                     // errorMsg 在 READY 态下是"提示"（如个别段未纳入），不是错误
-                    Surface(tonalElevation = 2.dp) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                n.errorMsg,
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            TextButton(onClick = { vm.retry() }) {
-                                Icon(Icons.Filled.Refresh, null)
-                                Text("补全")
-                            }
-                        }
-                    }
+                    MessageBanner(
+                        text = n.errorMsg,
+                        actionLabel = "补全",
+                        onAction = { vm.retry() },
+                        tone = BannerTone.Notice,
+                    )
                 }
             }
 
-            TabRow(selectedTabIndex = tab) {
-                listOf("导图", "原文", "思路").forEachIndexed { i, label ->
-                    Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) })
-                }
-            }
+            PillTabs(
+                labels = listOf("导图", "原文", "思路"),
+                selected = tab,
+                onSelect = { tab = it },
+                modifier = Modifier.padding(horizontal = Spacing.screen, vertical = Spacing.sm),
+            )
 
             // 三个标签叠放：导图 WebView 常驻组合（切页不销毁重建，保留缩放/平移位置），
             // 其他标签页用不透明背景盖在上面
@@ -212,35 +223,54 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 }
             }
 
-            // 底部：AI 建议输入
-            Surface(tonalElevation = 3.dp) {
+            // 底部：AI 建议输入条（悬浮在内容之上，圆角与卡片一致）
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                tonalElevation = 0.dp,
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.screen, vertical = Spacing.md),
                     verticalAlignment = Alignment.Bottom,
                 ) {
-                    OutlinedTextField(
-                        value = suggestion,
-                        onValueChange = { vm.suggestion.value = it },
-                        modifier = Modifier.weight(1f).height(72.dp),
-                        placeholder = {
-                            Text(
-                                "对导图提建议，如：把重点标成一级、补充相关案例、思路再口语化一点",
-                                style = MaterialTheme.typography.bodySmall,
+                    Surface(
+                        modifier = Modifier.weight(1f),
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        Box {
+                            if (suggestion.isEmpty()) {
+                                Text(
+                                    "想让 AI 怎么改？比如：补充相关案例、思路再口语化一点",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 14.dp),
+                                )
+                            }
+                            BasicTextField(
+                                value = suggestion,
+                                onValueChange = { vm.suggestion.value = it },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = 14.dp),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                maxLines = 3,
                             )
-                        },
-                        textStyle = MaterialTheme.typography.bodySmall,
-                        maxLines = 3,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(
+                        }
+                    }
+                    Spacer(Modifier.width(Spacing.sm))
+                    FilledIconButton(
                         onClick = {
                             val s = suggestion.trim()
                             // 不清空输入：改图成功后由 ViewModel 清掉；失败了建议还留在框里，可直接重发
                             if (s.isNotEmpty()) vm.sendSuggestion(s)
                         },
                         enabled = n?.mapJson != null && busyStage == null,
+                        modifier = Modifier.size(52.dp),
                     ) {
-                        Text("让 AI 改")
+                        Icon(Icons.Filled.AutoAwesome, "让 AI 改")
                     }
                 }
             }
@@ -265,19 +295,33 @@ private fun MapTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Mod
     val mapJson = n.mapJson
     if (mapJson == null) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (n.status != NoteStatus.TRANSCRIBING && n.status != NoteStatus.GENERATING) {
-                    Text("还没有思维导图")
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { vm.generate() }) { Text("生成导图") }
-                }
+            if (n.status != NoteStatus.TRANSCRIBING && n.status != NoteStatus.GENERATING) {
+                EmptyState(
+                    icon = Icons.Filled.AccountTree,
+                    title = "还没有思维导图",
+                    description = "点下面的按钮，AI 会通读原文，产出一张可拖拽的导图和一段思路。",
+                    action = {
+                        Button(
+                            onClick = { vm.generate() },
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.Filled.AutoAwesome, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("生成导图")
+                        }
+                    },
+                )
             }
         }
         return
     }
     var controller by remember { mutableStateOf<MapController?>(null) }
     val isDark = isSystemInDarkTheme()
-    Box(modifier.fillMaxSize()) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface),
+    ) {
         MindMapPanel(
             mapJson = mapJson,
             editable = n.status == NoteStatus.READY,
@@ -286,13 +330,36 @@ private fun MapTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Mod
             modifier = Modifier.fillMaxSize(),
             darkTheme = isDark,
         )
-        Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-            IconButton(onClick = { controller?.toCenter() }) {
-                Icon(Icons.Filled.CenterFocusStrong, "居中")
-            }
-            IconButton(onClick = { controller?.undo() }) {
-                Icon(Icons.Filled.Undo, "撤销")
-            }
+        // 画布上的浮层控制：半透明底板 + 图标，压在导图上不抢视线
+        Row(
+            modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            CanvasToolButton(Icons.Filled.CenterFocusStrong, "居中") { controller?.toCenter() }
+            CanvasToolButton(Icons.Filled.Undo, "撤销") { controller?.undo() }
+        }
+    }
+}
+
+/** 导图上方的圆形小按钮，浅色半透明底，压在画布上也能看清。 */
+@Composable
+private fun CanvasToolButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
+        shadowElevation = 2.dp,
+    ) {
+        IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+            Icon(
+                icon,
+                label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -302,24 +369,50 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
     if (n == null) return
     Column(modifier.fillMaxSize()) {
         if (n.audioPath != null) {
-            AudioPlayerRow(vm)
+            AudioPlayerCard(vm)
         }
         val content = n.content.orEmpty()
         if (content.isBlank()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(if (n.status == NoteStatus.TRANSCRIBING) "正在转写…" else "暂无文字内容")
+                EmptyState(
+                    icon = Icons.Filled.Article,
+                    title = if (n.status == NoteStatus.TRANSCRIBING) "正在转写…" else "还没有文字",
+                    description = if (n.status == NoteStatus.TRANSCRIBING)
+                        "识别完会自动接上生成，不用留在这个页面等。"
+                    else "这条笔记没有可直接阅读的原文。",
+                )
             }
         } else {
             val ctx = LocalContext.current
             SelectionContainer {
-                LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = Spacing.screen,
+                        end = Spacing.screen,
+                        top = Spacing.md,
+                        bottom = Spacing.xl,
+                    ),
+                ) {
                     item {
-                        Text(content, style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(24.dp))
-                        TextButton(onClick = {
-                            val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("原文", content))
-                        }) { Text("复制全文") }
+                        Text(
+                            content,
+                            style = MaterialTheme.typography.bodyLarge,
+                            // 原文是长文，行距和段距都放宽，手机上更好读
+                            lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
+                        )
+                        Spacer(Modifier.height(Spacing.xl))
+                        OutlinedButton(
+                            onClick = {
+                                val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("原文", content))
+                            },
+                            shape = CircleShape,
+                        ) {
+                            Icon(Icons.Filled.ContentCopy, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("复制全文")
+                        }
                     }
                 }
             }
@@ -327,28 +420,55 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
     }
 }
 
+/** 录音播放条：一整块卡片，播放键为实心主色，进度和时长并排。 */
 @Composable
-private fun AudioPlayerRow(vm: DetailViewModel) {
+private fun AudioPlayerCard(vm: DetailViewModel) {
     val playing by vm.playing.collectAsState()
     val posMs by vm.playPosMs.collectAsState()
     val durationMs by vm.playDurationMs.collectAsState()
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.screen, vertical = Spacing.sm),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        IconButton(onClick = { vm.togglePlay() }) {
-            Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, "播放/暂停")
+        Row(
+            modifier = Modifier.padding(start = Spacing.md, end = Spacing.lg, top = Spacing.sm, bottom = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilledIconButton(
+                onClick = { vm.togglePlay() },
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(
+                    if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    "播放/暂停",
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(Spacing.sm))
+            Column(Modifier.weight(1f)) {
+                Slider(
+                    value = if (durationMs > 0) posMs.toFloat() / durationMs else 0f,
+                    onValueChange = { vm.seekTo(it) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        Formatters.duration(posMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        Formatters.duration(durationMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
-        Slider(
-            value = if (durationMs > 0) posMs.toFloat() / durationMs else 0f,
-            onValueChange = { vm.seekTo(it) },
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            "${Formatters.duration(posMs)} / ${Formatters.duration(durationMs)}",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(start = 8.dp),
-        )
     }
 }
 
@@ -357,40 +477,72 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
     if (n == null) return
     val speaking by vm.ttsSpeaking.collectAsState()
     val rate by vm.ttsRate.collectAsState()
-    Column(modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier.fillMaxSize()) {
         val thinking = n.thinking
         // 占位提示只占剩余空间：朗读按钮必须始终留在屏幕里，思路还没生成时也知道去哪按
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
             if (thinking.isNullOrBlank()) {
-                Text(
-                    if (n.status == NoteStatus.GENERATING) "正在生成…" else "还没有思路\n生成完成后，点下面的按钮就能朗读",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                EmptyState(
+                    icon = Icons.Filled.Lightbulb,
+                    title = if (n.status == NoteStatus.GENERATING) "正在生成思路…" else "还没有思路",
+                    description = if (n.status == NoteStatus.GENERATING) "生成完成后就能在这里朗读。"
+                    else "生成完成后，点下面的按钮就能朗读。",
                 )
             } else {
                 SelectionContainer {
                     Text(
                         thinking,
                         style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.screen, vertical = Spacing.md),
                     )
                 }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = { vm.toggleTts() }, enabled = !thinking.isNullOrBlank()) {
-                Icon(if (speaking) Icons.Filled.Stop else Icons.Filled.PlayArrow, null)
-                Spacer(Modifier.width(4.dp))
-                Text(if (speaking) "停止" else "朗读思路")
+        // 朗读控制条：实心播放键 + 语速滑杆，整条贴在底部
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.screen, vertical = Spacing.sm),
+            ) {
+                FilledIconButton(
+                    onClick = { vm.toggleTts() },
+                    enabled = !thinking.isNullOrBlank(),
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        if (speaking) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        if (speaking) "停止朗读" else "朗读思路",
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    if (speaking) "朗读中" else "朗读思路",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (speaking) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "%.1fx".format(rate),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Slider(
+                    value = rate,
+                    onValueChange = { vm.setTtsRate(it) },
+                    valueRange = 0.5f..2.0f,
+                    modifier = Modifier.width(132.dp),
+                )
             }
-            Spacer(Modifier.width(16.dp))
-            Text("%.1fx".format(rate), style = MaterialTheme.typography.labelMedium)
-            Slider(
-                value = rate,
-                onValueChange = { vm.setTtsRate(it) },
-                valueRange = 0.5f..2.0f,
-                modifier = Modifier.weight(1f),
-            )
         }
     }
 }
@@ -440,6 +592,133 @@ private fun VersionsSheet(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * 页面顶部的胶囊标签页。
+ *
+ * 没有用 Material 的 TabRow：TabRow 自带一条贯穿全宽的指示条，在内容边缘是圆角卡片的
+ * 页面里显得很硬。这里改成三个等宽药丸，选中态用主色实底，切换时位置连续。
+ */
+@Composable
+private fun PillTabs(
+    labels: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(Modifier.padding(4.dp)) {
+            labels.forEachIndexed { i, label ->
+                val active = i == selected
+                val bg by androidx.compose.animation.animateColorAsState(
+                    targetValue = if (active) MaterialTheme.colorScheme.primary
+                    else androidx.compose.ui.graphics.Color.Transparent,
+                    animationSpec = androidx.compose.animation.core.tween(160),
+                    label = "tabBg$i",
+                )
+                Surface(
+                    onClick = { onSelect(i) },
+                    modifier = Modifier.weight(1f),
+                    shape = CircleShape,
+                    color = bg,
+                ) {
+                    Box(
+                        Modifier.padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (active) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum class BannerTone { Busy, Error, Notice }
+
+/** 顶部状态横幅：进行中 / 出错 / 完成但有提示，共用一种形状，只换色调与动作。 */
+@Composable
+private fun MessageBanner(
+    text: String,
+    tone: BannerTone,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    val (container, content) = when (tone) {
+        BannerTone.Error -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        BannerTone.Notice -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        BannerTone.Busy -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.screen, vertical = Spacing.sm)
+            .background(container, MaterialTheme.shapes.medium)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = content,
+        )
+        if (actionLabel != null && onAction != null) {
+            Spacer(Modifier.width(Spacing.sm))
+            TextButton(onClick = onAction) {
+                Text(actionLabel, color = content, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BusyBanner(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.screen, vertical = Spacing.sm)
+            .background(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.shapes.medium)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+    }
+}
+
+/** 顶栏副标题：从哪来、多长、什么时候，一行说清，避免用户在三个标签间找上下文。 */
+private fun subtitleFor(n: NoteEntity): String {
+    val source = when (n.source) {
+        com.tingsiwei.app.data.db.NoteSource.RECORD -> "录音"
+        com.tingsiwei.app.data.db.NoteSource.IMPORT -> "导入音频"
+        else -> "文字"
+    }
+    val parts = buildList {
+        add(source)
+        if (n.durationMs > 0) add(Formatters.duration(n.durationMs))
+        add(Formatters.dateTime(n.updatedAt))
+    }
+    return parts.joinToString(" · ")
 }
 
 private fun detailVmFactory(noteId: Long): ViewModelProvider.Factory = object : ViewModelProvider.Factory {

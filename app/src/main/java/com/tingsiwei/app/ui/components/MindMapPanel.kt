@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
+import com.tingsiwei.app.ui.theme.MapTheme
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -55,11 +56,19 @@ class MapController(private val webView: WebView) {
     fun init(json: String, dark: Boolean) = eval("appInit(${jsonArg(json)}, $dark)")
     fun setData(json: String) = eval("appSetData(${jsonArg(json)})")
     fun setDark(dark: Boolean) = eval("appSetDark($dark)")
+
+    /** 注入画布配色：深浅两套一次给全，之后切深色不用再解析 */
+    fun setColors(lightThemeJson: String, darkThemeJson: String) =
+        eval("appSetColors(${jsonArg(lightThemeJson)}, ${jsonArg(darkThemeJson)})")
     fun setEditable(editable: Boolean) = eval("appSetEditable($editable)")
     fun undo() = eval("appUndo()")
     fun redo() = eval("appRedo()")
     fun toCenter() = eval("appToCenter()")
     fun exportPng() = eval("appExportPng()")
+    fun zoomIn() = eval("appZoomIn()")
+    fun zoomOut() = eval("appZoomOut()")
+    fun zoomFit() = eval("appZoomFit()")
+    fun zoomReset() = eval("appZoomReset()")
 
     companion object {
         private val json = Json
@@ -107,7 +116,11 @@ fun MindMapPanel(
                     android.os.Build.PRODUCT.contains("sdk_gphone") ||
                     android.os.Build.MODEL.contains("Emulator", ignoreCase = true)
                 if (isEmulator) setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-                setBackgroundColor(android.graphics.Color.WHITE)
+                // 背景色跟画布一致，避免页面加载前先闪一下白/黑
+                setBackgroundColor(
+                    if (latestDark.value) android.graphics.Color.parseColor(MapTheme.Dark.background)
+                    else android.graphics.Color.parseColor(MapTheme.Light.background)
+                )
                 webChromeClient = object : android.webkit.WebChromeClient() {
                     override fun onConsoleMessage(message: android.webkit.ConsoleMessage?): Boolean {
                         Log.w("MindMapJS", message?.message() ?: "console")
@@ -145,6 +158,11 @@ fun MindMapPanel(
                 initedJson = mapJson
                 localJson = mapJson
                 if (isInit) {
+                    // 必须先给配色再 init：mind-elixir 在构造时就把主题读进去了
+                    ctl.setColors(
+                        MapTheme.Light.toMindElixirThemeJson(dark = false),
+                        MapTheme.Dark.toMindElixirThemeJson(dark = true),
+                    )
                     Log.w("MindMap", "init map, ${mapJson.length} chars")
                     latestOnController.value(ctl)
                     ctl.init(mapJson, latestDark.value)

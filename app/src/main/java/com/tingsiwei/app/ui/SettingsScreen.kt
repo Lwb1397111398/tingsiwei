@@ -1,42 +1,49 @@
 package com.tingsiwei.app.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,8 +53,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -68,6 +76,18 @@ import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.ElevenTts
 import com.tingsiwei.app.tts.OkHttpCloudTtsTransport
 import com.tingsiwei.app.tts.TtsPlayer
+import com.tingsiwei.app.ui.components.BusyLine
+import com.tingsiwei.app.ui.components.ChipPicker
+import com.tingsiwei.app.ui.components.ChoiceRow
+import com.tingsiwei.app.ui.components.InlineNotice
+import com.tingsiwei.app.ui.components.InfoRow
+import com.tingsiwei.app.ui.components.LabeledProgress
+import com.tingsiwei.app.ui.components.SectionCard
+import com.tingsiwei.app.ui.components.SettingsField
+import com.tingsiwei.app.ui.components.SettingHint
+import com.tingsiwei.app.ui.components.ThinDivider
+import com.tingsiwei.app.ui.components.ToggleRow
+import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -124,518 +144,582 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
+                title = { Text("设置", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         Column(
-            modifier = Modifier.padding(pad).fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.screen),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
-            // ---- LLM 接口 ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("LLM 接口（OpenAI 兼容）", style = MaterialTheme.typography.titleSmall)
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { vm.url.value = it },
-                        label = { Text("接口地址，如 https://api.xxx.com 或 https://api.xxx.com/v1") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall,
+            Spacer(Modifier.height(Spacing.xs))
+            StatusOverview(
+                modelReady = modelState.state == ModelState.READY,
+                ttsReady = ttsModelState.state == TtsModelState.READY,
+                engine = ttsEngine,
+                model = model,
+            )
+
+            // ---- AI 模型 ----
+            SettingsSection(
+                icon = Icons.Filled.SmartToy,
+                title = "AI 模型",
+                subtitle = "决定用哪个大模型来生成导图和思路",
+            ) {
+                SettingsField(
+                    value = url,
+                    onValueChange = { vm.url.value = it },
+                    label = "接口地址",
+                    placeholder = "https://api.xxx.com 或 https://api.xxx.com/v1",
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                )
+                SettingsField(
+                    value = key,
+                    onValueChange = { vm.key.value = it },
+                    label = "API Key",
+                    placeholder = "sk-…",
+                    obscure = true,
+                )
+                SettingsField(
+                    value = model,
+                    onValueChange = { vm.model.value = it },
+                    label = "模型",
+                    placeholder = "可手填，如 deepseek-chat",
+                )
+                if (models.isNotEmpty()) {
+                    // 拉取到的模型直接平铺展示，点选即用；仍可手填
+                    ChipPicker(
+                        options = models.map { it to it },
+                        selectedValue = model,
+                        onSelect = {
+                            vm.model.value = it
+                            keyboard?.hide()
+                        },
                     )
-                    OutlinedTextField(
-                        value = key,
-                        onValueChange = { vm.key.value = it },
-                        label = { Text("API KEY") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = model,
-                        onValueChange = { vm.model.value = it },
-                        label = { Text("模型（可手填）") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall,
-                    )
-                    if (models.isNotEmpty()) {
-                        // 拉取到的模型直接平铺展示，点选即用；仍可手填
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            models.forEach { m ->
-                                FilterChip(
-                                    selected = model == m,
-                                    onClick = {
-                                        vm.model.value = m
-                                        keyboard?.hide()
-                                    },
-                                    label = { Text(m, style = MaterialTheme.typography.bodySmall) },
-                                )
-                            }
-                        }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    OutlinedButton(onClick = { vm.fetchModels() }, enabled = !busy) {
+                        Text("获取模型列表", style = MaterialTheme.typography.labelLarge)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { vm.fetchModels() }, enabled = !busy) { Text("获取模型列表") }
-                        OutlinedButton(onClick = { vm.test() }, enabled = !busy) { Text("测试连接") }
-                        Button(onClick = { vm.save() }, enabled = !busy) { Text("保存") }
+                    OutlinedButton(onClick = { vm.test() }, enabled = !busy) {
+                        Text("测试连接", style = MaterialTheme.typography.labelLarge)
                     }
-                    if (busy) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("请求中…", style = MaterialTheme.typography.bodySmall)
-                        }
+                    Button(onClick = { vm.save() }, enabled = !busy) {
+                        Text("保存", style = MaterialTheme.typography.labelLarge)
                     }
                 }
+                if (busy) BusyLine("请求中…")
             }
 
             // ---- 语音转文字 ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("语音转文字", style = MaterialTheme.typography.titleSmall)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = transcribeMode == TranscribeMode.OFFLINE,
-                            onClick = { vm.setMode(TranscribeMode.OFFLINE) },
-                        )
-                        Text("离线模型（推荐，免费、录音完转写）", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = transcribeMode == TranscribeMode.SYSTEM,
-                            onClick = { vm.setMode(TranscribeMode.SYSTEM) },
-                        )
-                        Text("手机自带识别（边录边转，各手机效果不一）", style = MaterialTheme.typography.bodySmall)
-                    }
-                    // 模型下载卡片
-                    val (stateText, ready) = when (modelState.state) {
-                        ModelState.READY -> "已下载（${Formatters.fileSize(modelState.bytes)}）" to true
-                        ModelState.DOWNLOADING -> "下载中 ${(modelState.progress * 100).toInt()}%（${Formatters.fileSize(modelState.downloaded)} / ${Formatters.fileSize(modelState.total)}）" to false
-                        else -> "未下载（约 230MB，一次性下载）" to false
-                    }
-                    Text("SenseVoice 离线识别模型：$stateText", style = MaterialTheme.typography.bodySmall)
-                    if (modelState.state == ModelState.DOWNLOADING) {
-                        androidx.compose.material3.LinearProgressIndicator(
-                            progress = { modelState.progress.toFloat() },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (!ready) {
-                            Button(onClick = { vm.downloadModel() }, enabled = modelState.state != ModelState.DOWNLOADING) {
-                                Text(if (modelState.state == ModelState.DOWNLOADING) "下载中…" else "下载模型")
-                            }
-                        } else {
-                            TextButton(onClick = { vm.deleteModel() }) { Text("删除模型") }
+            SettingsSection(
+                icon = Icons.Filled.GraphicEq,
+                title = "语音转文字",
+                subtitle = "录音和导入的音频用哪种方式识别",
+            ) {
+                ChoiceRow(
+                    label = "离线模型",
+                    description = "免费、不联网，推荐。录完自动转写",
+                    selected = transcribeMode == TranscribeMode.OFFLINE,
+                    onClick = { vm.setMode(TranscribeMode.OFFLINE) },
+                )
+                ChoiceRow(
+                    label = "手机自带识别",
+                    description = "边录边出字，各手机效果不一",
+                    selected = transcribeMode == TranscribeMode.SYSTEM,
+                    onClick = { vm.setMode(TranscribeMode.SYSTEM) },
+                )
+                ThinDivider()
+                val modelReady = modelState.state == ModelState.READY
+                InfoRow(
+                    "SenseVoice 识别模型",
+                    when (modelState.state) {
+                        ModelState.READY -> "已下载 ${Formatters.fileSize(modelState.bytes)}"
+                        ModelState.DOWNLOADING -> "下载中"
+                        else -> "未下载"
+                    },
+                )
+                if (modelState.state == ModelState.DOWNLOADING) {
+                    LabeledProgress(
+                        label = "正在下载识别模型",
+                        progress = modelState.progress,
+                        trailing = "${Formatters.fileSize(modelState.downloaded)} / ${Formatters.fileSize(modelState.total)}",
+                    )
+                } else if (!modelReady) {
+                    SettingHint("约 230MB，只需下载一次。中途断开再点一次会接着下。")
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    if (!modelReady) {
+                        Button(
+                            onClick = { vm.downloadModel() },
+                            enabled = modelState.state != ModelState.DOWNLOADING,
+                        ) {
+                            Text(if (modelState.state == ModelState.DOWNLOADING) "下载中…" else "下载模型")
+                        }
+                    } else {
+                        TextButton(onClick = { vm.deleteModel() }) {
+                            Text("删除模型", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
             }
 
             // ---- 生成偏好 ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("生成偏好", style = MaterialTheme.typography.titleSmall)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = allowExpand, onCheckedChange = { vm.setAllowExpand(it) })
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("允许 AI 拓展知识", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "开启后 AI 会把与主题直接相关的知识自然补充进导图；关闭则只整理原文内容",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = stagedThinking, onCheckedChange = { vm.setStagedThinking(it) })
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("思路精修（更慢）", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "默认关：AI 一次读完成稿，速度最快。开启后先起草思路、再自查优化、最后按思路出图，" +
-                                    "图文更一致、拓展标注更准，但要多等约 2 次请求的时间",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
+            SettingsSection(
+                icon = Icons.Filled.AutoAwesome,
+                title = "生成偏好",
+                subtitle = "AI 整理内容时的取舍",
+            ) {
+                ToggleRow(
+                    title = "允许 AI 拓展知识",
+                    description = "开启后会把与主题直接相关的知识自然补进导图；关闭则只整理原文内容",
+                    checked = allowExpand,
+                    onCheckedChange = { vm.setAllowExpand(it) },
+                )
+                ThinDivider()
+                ToggleRow(
+                    title = "思路精修（更慢）",
+                    description = "先起草思路、再自查优化、最后按思路出图，图文更一致，但多等约 2 次请求",
+                    checked = stagedThinking,
+                    onCheckedChange = { vm.setStagedThinking(it) },
+                )
             }
 
             // ---- 长录音与限流 ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("长录音与限流", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "接口返回 429（限流）时会自动等待重试，已提炼的段落会保留，可从断点继续。" +
-                            "输出上限会在被截断时自动抬高重试，一般不用管。长录音总是失败就把节奏放慢、窗口调小。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("请求间隔", style = MaterialTheme.typography.bodyMedium)
-                        listOf(600L to "快", 1200L to "中", 2500L to "慢").forEach { (ms, label) ->
-                            if (minIntervalMs == ms) Button(onClick = {}) { Text(label) }
-                            else TextButton(onClick = { vm.setMinInterval(ms) }) { Text(label) }
-                        }
-                    }
-                    Column {
-                        Text("上下文窗口", style = MaterialTheme.typography.bodyMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(8192, 16384, 32768, 65536, 131072, 262144).forEach { n ->
-                                val label = "${n / 1024}k"
-                                if (contextWindow == n) Button(onClick = {}) { Text(label) }
-                                else TextButton(onClick = { vm.setContextWindow(n) }) { Text(label) }
-                            }
-                        }
-                        Text(
-                            "决定长内容怎么切分与单次请求的预算。大模型（尤其推理模型，思维链也占输出）建议 128k 起步；限流严重的渠道再调小",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = conservative, onCheckedChange = { vm.setConservative(it) })
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("保守模式", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "分段更少、间隔翻倍、窗口减半，给限流严重的渠道",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
+            SettingsSection(
+                icon = Icons.Filled.Speed,
+                title = "长录音与限流",
+                subtitle = "长内容怎么切、出错怎么退避",
+            ) {
+                SettingHint(
+                    "接口报 429（限流）时会自动等待重试，已提炼的段落会保留，可从断点继续。" +
+                        "长录音总是失败，就把节奏放慢、窗口调小。"
+                )
+                ThinDivider()
+                SettingHint("请求间隔", color = MaterialTheme.colorScheme.onSurface)
+                ChipPicker(
+                    options = listOf("600" to "快", "1200" to "中", "2500" to "慢"),
+                    selectedValue = minIntervalMs.toString(),
+                    onSelect = { vm.setMinInterval(it.toLong()) },
+                )
+                SettingHint("上下文窗口", color = MaterialTheme.colorScheme.onSurface)
+                ChipPicker(
+                    options = listOf(8192, 16384, 32768, 65536, 131072, 262144)
+                        .map { it.toString() to "${it / 1024}k" },
+                    selectedValue = contextWindow.toString(),
+                    onSelect = { vm.setContextWindow(it.toInt()) },
+                )
+                SettingHint(
+                    "决定长内容怎么切分与单次请求的预算。大模型（尤其推理模型，思维链也占输出）建议 128k 起步；" +
+                        "限流严重的渠道再调小。"
+                )
+                ThinDivider()
+                ToggleRow(
+                    title = "保守模式",
+                    description = "分段更少、间隔翻倍、窗口减半，给限流严重的渠道",
+                    checked = conservative,
+                    onCheckedChange = { vm.setConservative(it) },
+                )
             }
 
             // ---- 朗读 ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("朗读", style = MaterialTheme.typography.titleSmall)
+            SettingsSection(
+                icon = Icons.Filled.Headphones,
+                title = "朗读",
+                subtitle = "把「思路」读给你听，走路吃饭时也能记",
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("语速", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(Spacing.md))
+                    Slider(
+                        value = ttsRate,
+                        onValueChange = { vm.setTtsRate(it) },
+                        valueRange = 0.5f..2.0f,
+                        modifier = Modifier.weight(1f),
+                    )
                     Text(
-                        "朗读入口在笔记详情页「思路」标签底部：点开笔记 → 切到「思路」 → 点「朗读思路」。朗读中拖动下面的语速条立刻生效",
-                        style = MaterialTheme.typography.bodySmall,
+                        "%.1fx".format(ttsRate),
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("语速", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.width(12.dp))
-                        Slider(
-                            value = ttsRate,
-                            onValueChange = { vm.setTtsRate(it) },
-                            valueRange = 0.5f..2.0f,
-                            modifier = Modifier.weight(1f),
+                }
+                ThinDivider()
+                ChoiceRow(
+                    label = "系统语音",
+                    description = "手机自带，无需下载",
+                    selected = ttsEngine == TtsEngine.SYSTEM,
+                    onClick = { vm.setTtsEngine(TtsEngine.SYSTEM) },
+                )
+                ChoiceRow(
+                    label = "离线朗读模型",
+                    description = "离线可用，音色更自然，约 215MB",
+                    selected = ttsEngine == TtsEngine.LOCAL,
+                    onClick = { vm.setTtsEngine(TtsEngine.LOCAL) },
+                )
+                ChoiceRow(
+                    label = "在线朗读",
+                    description = "联网，声音最自然",
+                    selected = ttsEngine == TtsEngine.CLOUD,
+                    onClick = { vm.setTtsEngine(TtsEngine.CLOUD) },
+                )
+
+                if (ttsEngine == TtsEngine.LOCAL) {
+                    val ready = ttsModelState.state == TtsModelState.READY
+                    if (ttsModelState.state == TtsModelState.DOWNLOADING) {
+                        LabeledProgress(
+                            label = "正在下载 kokoro 模型",
+                            progress = ttsModelState.progress,
+                            trailing = "${Formatters.fileSize(ttsModelState.downloaded)} / ${Formatters.fileSize(ttsModelState.total)}",
                         )
-                        Text("%.1fx".format(ttsRate), style = MaterialTheme.typography.labelMedium)
+                    } else {
+                        InfoRow("kokoro 中英模型", if (ready) "已下载 ${Formatters.fileSize(ttsModelState.bytes)}" else "未下载")
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = ttsEngine == TtsEngine.SYSTEM,
-                            onClick = { vm.setTtsEngine(TtsEngine.SYSTEM) },
-                        )
-                        Text("系统语音（手机自带，无需下载）", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = ttsEngine == TtsEngine.LOCAL,
-                            onClick = { vm.setTtsEngine(TtsEngine.LOCAL) },
-                        )
-                        Text("离线朗读模型（离线可用，约 215MB）", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = ttsEngine == TtsEngine.CLOUD,
-                            onClick = { vm.setTtsEngine(TtsEngine.CLOUD) },
-                        )
-                        Text("在线朗读（联网，声音最自然）", style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (ttsEngine == TtsEngine.LOCAL) {
-                        val (stateText, ready) = when (ttsModelState.state) {
-                            TtsModelState.READY -> "已下载（${Formatters.fileSize(ttsModelState.bytes)}）" to true
-                            TtsModelState.DOWNLOADING -> "下载中 ${(ttsModelState.progress * 100).toInt()}%（${Formatters.fileSize(ttsModelState.downloaded)} / ${Formatters.fileSize(ttsModelState.total)}）" to false
-                            else -> if (ttsModelState.downloaded > 0) {
-                                "已下载 ${Formatters.fileSize(ttsModelState.downloaded)}，点下载继续" to false
-                            } else {
-                                "未下载（约 215MB，一次性下载）" to false
-                            }
-                        }
-                        Text("kokoro 中英模型（v1.1 int8）：$stateText", style = MaterialTheme.typography.bodySmall)
-                        if (ttsModelState.state == TtsModelState.DOWNLOADING) {
-                            androidx.compose.material3.LinearProgressIndicator(
-                                progress = { ttsModelState.progress.toFloat() },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!ready) {
-                                Button(
-                                    onClick = { vm.downloadTtsModel() },
-                                    enabled = ttsModelState.state != TtsModelState.DOWNLOADING,
-                                ) {
-                                    Text(if (ttsModelState.state == TtsModelState.DOWNLOADING) "下载中…" else "下载模型")
-                                }
-                            } else {
-                                TextButton(onClick = { vm.deleteTtsModel() }) { Text("删除模型") }
-                            }
-                        }
-                    }
-                    if (ttsEngine == TtsEngine.CLOUD) {
-                        // 在线服务两档：官方 ElevenLabs（只填 Key）/ 自定义 OpenAI 兼容渠道；两档配置互不覆盖
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = ttsCloudProvider == TtsCloudProvider.ELEVEN,
-                                onClick = { vm.setTtsCloudProvider(TtsCloudProvider.ELEVEN) },
-                            )
-                            Text("官方 ElevenLabs（填 Key 即用）", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = ttsCloudProvider == TtsCloudProvider.CUSTOM,
-                                onClick = { vm.setTtsCloudProvider(TtsCloudProvider.CUSTOM) },
-                            )
-                            Text("自定义（OpenAI 兼容渠道）", style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (ttsCloudProvider == TtsCloudProvider.ELEVEN) {
-                            Text(
-                                "已内置官方接口，不用填地址；免费档每月 1 万字符额度，用完等下月重置。" +
-                                    "语速条照常可用（官方支持 0.7~1.2 倍）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            OutlinedTextField(
-                                value = ttsElevenKey,
-                                onValueChange = { vm.setTtsElevenKey(it) },
-                                label = { Text("API Key（elevenlabs.io 免费注册领取）") },
-                                placeholder = { Text("sk_…") },
-                                visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                            )
-                            OutlinedTextField(
-                                value = ttsElevenModel,
-                                onValueChange = { vm.setTtsElevenModel(it) },
-                                label = { Text("朗读模型（可手填，或点下方切换）") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                            )
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ElevenTts.MODELS.forEach { (id, label) ->
-                                    FilterChip(
-                                        selected = ttsElevenModel == id,
-                                        onClick = {
-                                            vm.setTtsElevenModel(id)
-                                            keyboard?.hide()
-                                        },
-                                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-                                    )
-                                }
-                            }
-                            OutlinedTextField(
-                                value = ttsElevenVoice,
-                                onValueChange = { vm.setTtsElevenVoice(it) },
-                                label = { Text("音色（点「获取音色」选择，或手填音色 ID）") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                            )
-                            if (elevenVoices.isNotEmpty()) {
-                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    elevenVoices.forEach { v ->
-                                        FilterChip(
-                                            selected = ttsElevenVoice == v.id,
-                                            onClick = {
-                                                vm.setTtsElevenVoice(v.id)
-                                                keyboard?.hide()
-                                            },
-                                            label = { Text(v.label, style = MaterialTheme.typography.bodySmall) },
-                                        )
-                                    }
-                                }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedButton(onClick = { vm.fetchElevenVoices() }, enabled = !elevenBusy) {
-                                    Text("获取音色")
-                                }
-                                if (elevenBusy) {
-                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                    Text("获取中…", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                            Text(
-                                "官方音色都能读中文；换模型或音色后点「试听当前引擎」验证",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                        OutlinedTextField(
-                            value = ttsCloudUrl,
-                            onValueChange = { vm.setTtsCloudUrl(it) },
-                            label = { Text("语音服务地址（默认硅基流动，其他 OpenAI 兼容渠道也可以）") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedTextField(
-                            value = ttsCloudKey,
-                            onValueChange = { vm.setTtsCloudKey(it) },
-                            label = { Text("API Key（渠道注册领取）") },
-                            placeholder = { Text("sk-…") },
-                            visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedTextField(
-                            value = ttsCloudModel,
-                            onValueChange = { vm.setTtsCloudModel(it) },
-                            label = { Text("朗读模型（可手填，或点「检索模型」选）") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        if (ttsModels.isNotEmpty()) {
-                            // 检索到的模型直接平铺展示，点选即用；仍可手填
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ttsModels.forEach { m ->
-                                    FilterChip(
-                                        selected = ttsCloudModel == m,
-                                        onClick = {
-                                            vm.setTtsCloudModel(m)
-                                            keyboard?.hide()
-                                        },
-                                        label = { Text(m, style = MaterialTheme.typography.bodySmall) },
-                                    )
-                                }
-                            }
-                            if (ttsModelsAll) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        if (!ready) {
+                            Button(
+                                onClick = { vm.downloadTtsModel() },
+                                enabled = ttsModelState.state != TtsModelState.DOWNLOADING,
+                            ) {
                                 Text(
-                                    "没筛出明确的语音模型，以上是全部模型——点选后点下面「试听当前引擎」验证能不能出声",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    if (ttsModelState.state == TtsModelState.DOWNLOADING) "下载中…"
+                                    else if (ttsModelState.downloaded > 0) "继续下载" else "下载模型"
                                 )
                             }
+                        } else {
+                            TextButton(onClick = { vm.deleteTtsModel() }) {
+                                Text("删除模型", color = MaterialTheme.colorScheme.error)
+                            }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    }
+                }
+
+                if (ttsEngine == TtsEngine.CLOUD) {
+                    ThinDivider()
+                    // 两档：官方 ElevenLabs 只填 Key；自定义填任意 OpenAI 兼容渠道。两档配置互不覆盖
+                    ChoiceRow(
+                        label = "官方 ElevenLabs",
+                        description = "内置地址，填 Key 即用；免费档每月 1 万字符",
+                        selected = ttsCloudProvider == TtsCloudProvider.ELEVEN,
+                        onClick = { vm.setTtsCloudProvider(TtsCloudProvider.ELEVEN) },
+                    )
+                    ChoiceRow(
+                        label = "自定义渠道",
+                        description = "任何 OpenAI 兼容的语音服务",
+                        selected = ttsCloudProvider == TtsCloudProvider.CUSTOM,
+                        onClick = { vm.setTtsCloudProvider(TtsCloudProvider.CUSTOM) },
+                    )
+                    if (ttsCloudProvider == TtsCloudProvider.ELEVEN) {
+                        SettingsField(
+                            value = ttsElevenKey,
+                            onValueChange = { vm.setTtsElevenKey(it) },
+                            label = "API Key（elevenlabs.io 免费注册领取）",
+                            placeholder = "sk_…",
+                            obscure = true,
+                        )
+                        SettingsField(
+                            value = ttsElevenModel,
+                            onValueChange = { vm.setTtsElevenModel(it) },
+                            label = "朗读模型",
+                        )
+                        ChipPicker(
+                            options = ElevenTts.MODELS.map { it.first to it.second },
+                            selectedValue = ttsElevenModel,
+                            onSelect = {
+                                vm.setTtsElevenModel(it)
+                                keyboard?.hide()
+                            },
+                        )
+                        SettingsField(
+                            value = ttsElevenVoice,
+                            onValueChange = { vm.setTtsElevenVoice(it) },
+                            label = "音色",
+                            placeholder = "点「获取音色」选择，或手填音色 ID",
+                        )
+                        if (elevenVoices.isNotEmpty()) {
+                            ChipPicker(
+                                options = elevenVoices.map { it.id to it.label },
+                                selectedValue = ttsElevenVoice,
+                                onSelect = {
+                                    vm.setTtsElevenVoice(it)
+                                    keyboard?.hide()
+                                },
+                            )
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedButton(onClick = { vm.fetchElevenVoices() }, enabled = !elevenBusy) {
+                                Text("获取音色")
+                            }
+                            if (elevenBusy) BusyLine("获取中…")
+                        }
+                        SettingHint("官方音色都能读中文；换模型或音色后点「试听」验证。")
+                    } else {
+                        SettingsField(
+                            value = ttsCloudUrl,
+                            onValueChange = { vm.setTtsCloudUrl(it) },
+                            label = "语音服务地址",
+                            placeholder = "https://api.siliconflow.cn/v1",
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        )
+                        SettingsField(
+                            value = ttsCloudKey,
+                            onValueChange = { vm.setTtsCloudKey(it) },
+                            label = "API Key（渠道注册领取）",
+                            placeholder = "sk-…",
+                            obscure = true,
+                        )
+                        SettingsField(
+                            value = ttsCloudModel,
+                            onValueChange = { vm.setTtsCloudModel(it) },
+                            label = "朗读模型",
+                            placeholder = "点「检索模型」选，或手填",
+                        )
+                        if (ttsModels.isNotEmpty()) {
+                            ChipPicker(
+                                options = ttsModels.map { it to it },
+                                selectedValue = ttsCloudModel,
+                                onSelect = {
+                                    vm.setTtsCloudModel(it)
+                                    keyboard?.hide()
+                                },
+                            )
+                            if (ttsModelsAll) {
+                                SettingHint("这个渠道没标出明确的语音模型，上面是全部模型——点选后试听验证。")
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             OutlinedButton(onClick = { vm.fetchTtsModels() }, enabled = !ttsBusy) {
                                 Text("检索模型")
                             }
-                            if (ttsBusy) {
-                                CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                Text("检索中…", style = MaterialTheme.typography.bodySmall)
-                            }
+                            if (ttsBusy) BusyLine("检索中…")
                         }
-                        OutlinedTextField(
+                        SettingsField(
                             value = ttsCloudVoice,
                             onValueChange = { vm.setTtsCloudVoice(it) },
-                            label = { Text("音色（可手填）") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
+                            label = "音色（可手填）",
                         )
                         val voicePresets = CloudTts.voicePresetsFor(ttsCloudModel)
                         if (voicePresets.isNotEmpty()) {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                voicePresets.forEach { (name, label) ->
-                                    FilterChip(
-                                        selected = ttsCloudVoice == name || ttsCloudVoice == CloudTts.voiceId(name),
-                                        onClick = { vm.setTtsCloudVoice(name) },
-                                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-                                    )
-                                }
-                            }
+                            ChipPicker(
+                                options = voicePresets.map { (name, label) ->
+                                    name to label
+                                },
+                                selectedValue = ttsCloudVoice,
+                                onSelect = { vm.setTtsCloudVoice(it) },
+                            )
                         }
-                        Text(
+                        SettingHint(
                             "任何 OpenAI 兼容渠道都能用：填好地址和 Key 点「检索模型」，筛出语音类模型点选即用。" +
-                                "换模型后音色可能要换（CosyVoice 点上面音色片，OpenAI 式模型手填 alloy 等），" +
-                                "选完点「试听当前引擎」验证。联网时边生成边播；朗读正文出错会自动先用离线/系统语音并提示原因",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                "朗读正文出错会自动回落到离线/系统语音并提示原因。"
                         )
+                    }
+                } else if (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()) {
+                    // 最常见的「填了没反应」：配置都在，引擎却没切过来
+                    InlineNotice(
+                        text = "已填写在线朗读的 Key，但当前引擎不是「在线朗读」——要用它的声音，点选上面的「在线朗读」。",
+                        container = MaterialTheme.colorScheme.tertiaryContainer,
+                        content = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+
+                ThinDivider()
+                Button(
+                    onClick = { vm.togglePreview() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        if (previewSpeaking) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        null,
+                        Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (previewSpeaking) "停止试听" else "试听当前引擎")
+                }
+                SettingHint("朗读入口在笔记详情页「思路」标签底部。")
+            }
+
+            // ---- 应用更新 ----
+            SettingsSection(
+                icon = Icons.Filled.SystemUpdate,
+                title = "应用更新",
+                subtitle = "手机上直接升级，不用连电脑传 APK",
+            ) {
+                InfoRow("当前版本", "v${updateVm.currentVersion}")
+                ToggleRow(
+                    title = "自动检查更新",
+                    description = "每天最多联网检查一次，发现新版本弹窗提醒",
+                    checked = updateVm.autoCheck,
+                    onCheckedChange = { updateVm.changeAutoCheck(it) },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    Button(
+                        onClick = { updateVm.checkNow() },
+                        enabled = !updateVm.checking && !updateVm.downloading,
+                    ) { Text(if (updateVm.checking) "检查中…" else "检查更新") }
+                    TextButton(onClick = { updateVm.openGuide() }) { Text("如何获取令牌？") }
+                }
+                SettingsField(
+                    value = updateVm.tokenInput,
+                    onValueChange = { updateVm.tokenInput = it },
+                    label = "GitHub 访问令牌（可选）",
+                    placeholder = if (updateVm.hasToken) "已保存（输入以更换）" else "github_pat_…",
+                    obscure = true,
+                    trailing = {
+                        if (updateVm.hasToken) {
+                            TextButton(onClick = { updateVm.clearToken() }) { Text("清除") }
                         }
-                    } else if (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()) {
-                        // 最常见的「填了没反应」：配置都在，引擎却没切过来
-                        Text(
-                            "已填写在线朗读的 Key，但当前引擎不是「在线朗读」——要用它的声音，点选上面的「在线朗读」",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
-                    OutlinedButton(onClick = { vm.togglePreview() }) {
-                        Text(if (previewSpeaking) "停止试听" else "试听当前引擎")
-                    }
+                    },
+                )
+                OutlinedButton(
+                    onClick = { updateVm.saveToken() },
+                    enabled = updateVm.tokenInput.isNotBlank(),
+                ) { Text("保存令牌") }
+                updateVm.status?.let {
+                    SettingHint(
+                        it,
+                        color = if (updateVm.statusError) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
 
-            // ---- 应用更新（自更新：手机上直接升级，不用连电脑传 APK） ----
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("应用更新", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "当前版本 v${updateVm.currentVersion}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("自动检查更新", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "每天最多联网检查一次，发现新版本弹窗提醒",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(checked = updateVm.autoCheck, onCheckedChange = { updateVm.changeAutoCheck(it) })
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { updateVm.checkNow() },
-                            enabled = !updateVm.checking && !updateVm.downloading,
-                        ) { Text(if (updateVm.checking) "检查中…" else "检查更新") }
-                        TextButton(onClick = { updateVm.openGuide() }) { Text("如何获取令牌？") }
-                    }
-                    OutlinedTextField(
-                        value = updateVm.tokenInput,
-                        onValueChange = { updateVm.tokenInput = it },
-                        label = { Text("GitHub 访问令牌（可选——仓库已公开，通常不用填）") },
-                        placeholder = { Text(if (updateVm.hasToken) "已保存（输入以更换）" else "github_pat_…") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        trailingIcon = {
-                            if (updateVm.hasToken) TextButton(onClick = { updateVm.clearToken() }) { Text("清除") }
-                        },
-                    )
-                    OutlinedButton(
-                        onClick = { updateVm.saveToken() },
-                        enabled = updateVm.tokenInput.isNotBlank(),
-                    ) { Text("保存令牌") }
-                    updateVm.status?.let {
-                        Text(
-                            it,
-                            color = if (updateVm.statusError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
+            // ---- 关于 ----
+            SettingsSection(
+                icon = Icons.Filled.Info,
+                title = "关于",
+                subtitle = "听的思维 · 录音变成思维导图",
+            ) {
+                InfoRow("版本", "v${updateVm.currentVersion}")
+                SettingHint(
+                    "录下上课、聊天或面试，自动转写成文字，再整理成可拖拽的思维导图 + 一段帮你记忆的思路。\n" +
+                        "全部笔记与录音只存在本机；AI 接口的 Key 也只存在本机。"
+                )
             }
-            Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * 顶部状态概览：三行小字，一眼看出「AI 配了没、模型装了没、声音用的哪个」。
+ *
+ * 未就绪的状态用灰色空心圈、就绪用主色实心点——不用红色或橙色，因为「还没下载」
+ * 不是错误，只是还没做，用报警色会让人以为出了问题。
+ */
+@Composable
+private fun StatusOverview(modelReady: Boolean, ttsReady: Boolean, engine: String, model: String) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "当前配置",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            StatusLine(
+                "AI 模型",
+                if (model.isBlank()) "未选择，填下面三项即可" else model,
+                ok = model.isNotBlank(),
+            )
+            StatusLine("识别模型", if (modelReady) "已就绪" else "未下载", ok = modelReady)
+            StatusLine(
+                "朗读",
+                when (engine) {
+                    TtsEngine.LOCAL -> if (ttsReady) "离线模型" else "离线模型（未下载）"
+                    TtsEngine.CLOUD -> "在线"
+                    else -> "系统语音"
+                },
+                ok = engine != TtsEngine.LOCAL || ttsReady,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusLine(label: String, value: String, ok: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (ok) {
+            Box(Modifier.size(7.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+        } else {
+            Box(
+                Modifier
+                    .size(7.dp)
+                    .background(MaterialTheme.colorScheme.outline, CircleShape),
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(72.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 设置分组：图标 + 标题 + 一句说明 + 内容。
+ * 不用 Card 的阴影，改用浅色底容器——设置页一屏有六组，堆阴影会很脏。
+ */
+@Composable
+private fun SettingsSection(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(30.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+            Spacer(Modifier.width(Spacing.md))
+            Column {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        SectionCard(content = content)
     }
 }
 

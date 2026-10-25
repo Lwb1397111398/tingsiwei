@@ -8,7 +8,7 @@
 
 | 模块 | 位置 | 职责 | 总览 |
 | --- | --- | --- | --- |
-| 入口与导航 | `app/src/main/java/com/tingsiwei/app/App.kt`、`MainActivity.kt`、`ui/AppNav.kt`、`ui/theme/Theme.kt`、`app/src/main/AndroidManifest.xml` | 单 Activity + Compose Navigation，5 个路由：home / record / textinput / detail/{noteId} / settings；Application 单例、主题、权限与前台服务注册；顶层挂应用自更新弹窗与启动静默检查 | [入口与导航模块总览.md](入口与导航模块总览.md) |
+| 入口与导航 | `app/src/main/java/com/tingsiwei/app/App.kt`、`MainActivity.kt`、`ui/AppNav.kt`、`ui/theme/Theme.kt`、`ui/theme/Tokens.kt`、`ui/components/Common.kt`、`app/src/main/AndroidManifest.xml` | 单 Activity + Compose Navigation，5 个路由：home / record / textinput / detail/{noteId} / settings；Application 单例；品牌主题（Palette 明暗两套 + 中文字体排版 + 五档圆角 + 间距，**不跟随系统动态取色**）与共享界面零件（状态药丸/空状态/区块容器/进度条）、导图画布配色（`MapTheme`）；权限与前台服务注册；顶层挂应用自更新弹窗与启动静默检查 | [入口与导航模块总览.md](入口与导航模块总览.md) |
 | 首页 | `ui/HomeScreen.kt` | 笔记列表、状态徽标、新建入口 | [首页模块总览.md](首页模块总览.md) |
 | 录音页 | `ui/RecordScreen.kt` | 录音控制、实时字幕、进度与通知联动 | [录音页模块总览.md](录音页模块总览.md) |
 | 文字录入页 | `ui/TextInputScreen.kt` | 粘贴文字/缩进树导图直接建笔记 | [文字录入页模块总览.md](文字录入页模块总览.md) |
@@ -81,6 +81,8 @@
 - 模拟器镜像包名是 `system-images;android-37.0;google_apis_playstore;x86_64`（SDK 目录里的 `google_apis_playstore_ps16k` 目录是无效残留）
 
 ## 最后更新
+
+2026-10-25 · 界面美化批（五个页面 + 主题层 + 导图画布）：新增 `ui/theme/Tokens.kt`（色板/排版/圆角/间距）、`ui/components/Common.kt`（共享零件）、`ui/components/SettingsParts.kt`（设置页控件）三个文件；重写 `Theme.kt`（去动态取色，改品牌色 + `MapTheme` 画布配色）；首页/录音页/文字录入页/详情页/设置页五份总览与导图画布总览同批更新，入口与导航行的入口文件补两个新文件。逻辑层（ViewModel、数据层、流水线、TTS、自更新）**零改动**；`testDebugUnitTest` 207 例仍全绿、`assembleDebug` 通过；模拟器实测首页/详情三标签/录音页/文字录入页/设置页明暗两套 + 导图自适应缩放全部正常。
 
 2026-10-24 · 在线朗读分两档，新增「官方 ElevenLabs」并设为默认：TTS 行加 `ElevenTts.kt`/`CloudTtsAudio.kt` 两档并列、设置页行改两档配置、数据层行 16→21 键、单测 184→207 例（`ElevenTtsTest` 10、`CloudTtsTest` 7→21 为前一轮已扩）。同批改写：TTS朗读/设置页/数据层三份总览。模拟器实测：官方档获取音色 21 个 + 试听合成出声（222912 字节流式 PCM）全通；官方语速 Float 长尾被 400 拒的 bug 已修（TTS 总览坑 16）。
 

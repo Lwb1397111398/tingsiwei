@@ -5,6 +5,16 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +25,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Mic
@@ -26,18 +39,22 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -47,6 +64,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.record.RecordSession
+import com.tingsiwei.app.ui.components.InlineNotice
+import com.tingsiwei.app.ui.components.StatusDot
+import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.launch
 
@@ -73,48 +93,80 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("录音") },
+                title = { Text("录音", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
             )
         },
     ) { pad ->
         Column(
-            modifier = Modifier.padding(pad).fillMaxSize().padding(24.dp),
+            modifier = Modifier.padding(pad).fillMaxSize().padding(horizontal = Spacing.screen),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(24.dp))
-            Text(
-                if (isRecording) "正在录音" else "点下方按钮开始录音",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.lg))
+
+            // 状态行：一个点 + 一句话，替代原来干巴巴的「正在录音」
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    isRecording && !isPaused -> {
+                        StatusDot(MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "正在录音",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    isPaused -> {
+                        StatusDot(MaterialTheme.colorScheme.tertiary)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "已暂停",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                    else -> Text(
+                        "准备就绪",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(Spacing.lg))
+
+            // 计时：不录时也显示 00:00，但用弱色，避免「大数字空着」的突兀
             Text(
                 Formatters.duration(durationMs),
-                style = MaterialTheme.typography.displaySmall,
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Light,
+                color = if (isRecording) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Spacer(Modifier.height(Spacing.sm))
             Text(
-                "识别方式：" + if (mode == TranscribeMode.SYSTEM) "手机自带识别（边录边转）" else "离线模型（录完后转写）",
-                style = MaterialTheme.typography.labelMedium,
+                if (mode == TranscribeMode.SYSTEM) "手机自带识别 · 边录边出字"
+                else "离线模型 · 录完自动转写",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (isRecording) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "锁屏或离开本页录音都会继续，从通知栏可回到本页或结束录音",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(32.dp))
 
-            // 大录音按钮
-            FilledIconButton(
+            Spacer(Modifier.height(Spacing.xxl))
+
+            RecordButton(
+                isRecording = isRecording,
+                isPaused = isPaused,
                 onClick = {
                     if (!isRecording) {
                         val granted = ContextCompat.checkSelfPermission(
@@ -131,49 +183,153 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                         }
                     } else if (isPaused) vm.resume() else vm.pause()
                 },
-                modifier = Modifier.size(96.dp),
-            ) {
-                Icon(
-                    if (isRecording && !isPaused) Icons.Filled.Pause else Icons.Filled.Mic,
-                    contentDescription = null,
-                    modifier = Modifier.size(44.dp),
-                    tint = if (isRecording && !isPaused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
+            )
 
-            Spacer(Modifier.height(24.dp))
-            if (isRecording) {
-                Row {
-                    OutlinedButton(onClick = { vm.stopAndSave() }) {
-                        Icon(Icons.Filled.Stop, null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("完成")
+            Spacer(Modifier.height(Spacing.lg))
+            Text(
+                when {
+                    !isRecording -> "点一下开始"
+                    isPaused -> "点上方按钮继续"
+                    else -> "点上方按钮暂停"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(Spacing.xl))
+
+            // 结束 / 取消：录音中才出现
+            AnimatedVisibility(visible = isRecording, enter = fadeIn(), exit = fadeOut()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = { vm.stopAndSave() },
+                        shape = CircleShape,
+                        modifier = Modifier.height(48.dp),
+                    ) {
+                        Icon(Icons.Filled.Stop, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("完成并保存")
                     }
-                    Spacer(Modifier.width(16.dp))
-                    OutlinedButton(onClick = { vm.cancelIfAny(); onBack() }) {
-                        Text("取消")
+                    Spacer(Modifier.width(Spacing.md))
+                    TextButton(onClick = { vm.cancelIfAny(); onBack() }) {
+                        Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
 
             error?.let {
-                Spacer(Modifier.height(16.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(Spacing.lg))
+                InlineNotice(
+                    text = it,
+                    container = MaterialTheme.colorScheme.errorContainer,
+                    content = MaterialTheme.colorScheme.onErrorContainer,
+                )
             }
 
-            // 系统识别的实时文字
+            Spacer(Modifier.height(Spacing.xl))
+
+            // 系统识别的实时文字：独立成块，长文时不跟按钮抢空间
             if (mode == TranscribeMode.SYSTEM) {
-                Spacer(Modifier.height(24.dp))
-                val showText = finalText + if (partialText.isNotEmpty()) "\n" + partialText else ""
+                val showText = finalText + if (partialText.isNotEmpty()) "\n$partialText" else ""
                 if (showText.isNotBlank()) {
-                    Text(
-                        showText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    ) {
+                        Column(
+                            Modifier
+                                .padding(Spacing.lg)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            Text(
+                                "实时文字",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(Spacing.sm))
+                            Text(
+                                showText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
                 }
+            } else if (!isRecording) {
+                InlineNotice(
+                    text = "录音中可以锁屏、切到别的应用，录音不会中断；完成后会在通知栏出现进度。",
+                    container = MaterialTheme.colorScheme.secondaryContainer,
+                    content = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
             }
+        }
+    }
+}
+
+/**
+ * 录音主按钮：录音中换成红色暂停态 + 一圈缓慢扩散的光环（真实的「在录」反馈），
+ * 暂停态为琥珀色，待机态是主色麦克风。
+ */
+@Composable
+private fun RecordButton(isRecording: Boolean, isPaused: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val container = when {
+        !isRecording -> scheme.primaryContainer
+        isPaused -> scheme.tertiaryContainer
+        else -> scheme.errorContainer
+    }
+    val content = when {
+        !isRecording -> scheme.onPrimaryContainer
+        isPaused -> scheme.onTertiaryContainer
+        else -> scheme.onErrorContainer
+    }
+    val icon = when {
+        isPaused -> Icons.Filled.PlayArrow
+        isRecording -> Icons.Filled.Pause
+        else -> Icons.Filled.Mic
+    }
+
+    // 呼吸光环：只在不暂停的录音中出现；用 scale + alpha，不改尺寸，不会引起布局抖动
+    val transition = rememberInfiniteTransition(label = "rec")
+    val pulseScale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "pulseScale",
+    )
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 0.28f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "pulseAlpha",
+    )
+
+    Box(contentAlignment = Alignment.Center) {
+        if (isRecording && !isPaused) {
+            Box(
+                Modifier
+                    .size(104.dp)
+                    .scale(pulseScale)
+                    .background(scheme.error.copy(alpha = pulseAlpha), CircleShape),
+            )
+        }
+        FilledIconButton(
+            onClick = onClick,
+            modifier = Modifier.size(104.dp),
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = container,
+                contentColor = content,
+            ),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(42.dp))
         }
     }
 }
