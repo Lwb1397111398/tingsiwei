@@ -9,14 +9,19 @@
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "b81e64967dffa7b29b2780545fa23e4a9c625990",
-    "note": "本次改动为 TTS 云朗读（tts_cloud_model 键+朗读卡UI），不触转写模式逻辑",
-    "acked_at": "2026-10-24 14:46:04"
+    "sha1": "c6619a40ab9db99c6ca33e64abbd186fb63a6128",
+    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
+    "acked_at": "2026-10-25 14:31:39"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "3c96db786b6dce4314d60fd0e5911ebb4709cef8",
-    "note": "本次改动为 TTS 云朗读（tts_cloud_model 键+朗读卡UI），不触转写模式逻辑",
-    "acked_at": "2026-10-24 14:46:04"
+    "sha1": "5fa142cc1a7f890a6849f0c10ed4d27aebb8a96f",
+    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
+    "acked_at": "2026-10-25 14:31:39"
+   },
+   "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
+    "sha1": "ed37b63cfb367158f6c5bab7aab13a306aa2db75",
+    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
+    "acked_at": "2026-10-25 14:31:39"
    }
   }
  }
