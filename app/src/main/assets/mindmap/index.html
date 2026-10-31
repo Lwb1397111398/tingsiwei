@@ -85,7 +85,7 @@ var mind = null;
 var dark = false;
 var saveTimer = null;
 // 「适应屏幕」的最小缩放：再小字就看不清了，宁可让用户平移。0.45 ≈ 正文 6px 的临界
-var MIN_FIT = 0.4;
+var MIN_FIT = 0.55;
 
 // 不依赖 CSS 高度百分比链（部分 WebView 上 body{height:100%} 不生效），全部用像素钉死
 function fixSize() {
@@ -214,6 +214,8 @@ window.appInit = function (jsonText, darkMode) {
         mind.scaleFit();
         if (mind.scaleVal < MIN_FIT) mind.scale(MIN_FIT);
         mind.toCenter();
+        // 缩放后布局要等一帧才稳定，再居一次，否则大图会偏到一侧
+        setTimeout(function () { try { mind.toCenter(); } catch (e) {} }, 200);
       } catch (e) {}
     }, 80);
     if (dark) applyDark();

@@ -197,7 +197,7 @@ data class MapColors(
                 "--root-color": "$rootText",
                 "--root-bgcolor": "$rootBackground",
                 "--root-border-color": "rgba(0,0,0,0)",
-                "--main-border": "1.5px solid",
+                "--main-border": "none",
                 "--main-color": "$mainText",
                 "--main-bgcolor": "$mainBackground",
                 "--main-bgcolor-transparent": "$mainBackground",
