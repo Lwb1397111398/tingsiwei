@@ -9,14 +9,14 @@
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "c6619a40ab9db99c6ca33e64abbd186fb63a6128",
-    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
-    "acked_at": "2026-10-25 14:31:39"
+    "sha1": "72db10c5ac58967b658909b00536da480d66503b",
+    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
+    "acked_at": "2026-10-31 18:36:04"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
-    "note": "本次仅重排设置页单选行与录音页视觉，TranscribeMode 定义、默认值 OFFLINE、两处读盘逻辑与 setMode 调用链零改动",
-    "acked_at": "2026-10-25 16:03:59"
+    "sha1": "426b78ea3bfd2bc1f6b118ebd4cda4a46e75423e",
+    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
+    "acked_at": "2026-10-31 18:36:04"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "ed37b63cfb367158f6c5bab7aab13a306aa2db75",
@@ -24,9 +24,9 @@
     "acked_at": "2026-10-25 14:31:39"
    },
    "app/src/main/java/com/tingsiwei/app/ui/RecordScreen.kt": {
-    "sha1": "7b4d2b5f5ceaa4506a56881f6647f5e4defe5240",
-    "note": "本次仅重排设置页单选行与录音页视觉，TranscribeMode 定义、默认值 OFFLINE、两处读盘逻辑与 setMode 调用链零改动",
-    "acked_at": "2026-10-25 16:03:59"
+    "sha1": "1b4fb247716fbfd8fd1e092ec3e2b7e2b25bbbfc",
+    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
+    "acked_at": "2026-10-31 18:36:04"
    }
   },
   "设置页模块总览.md": {
