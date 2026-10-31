@@ -19,14 +19,19 @@
     "acked_at": "2026-10-31 19:39:15"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
-    "sha1": "ed37b63cfb367158f6c5bab7aab13a306aa2db75",
-    "note": "2026-10-25 四连修未涉转写模式职能：SettingsRepository/SettingsScreen 本次零改动，NoteProcessor 仅加前台服务拉起与 anyBusy（OFFLINE/SYSTEM 默认值与切换逻辑原样）",
-    "acked_at": "2026-10-25 14:31:39"
+    "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
+    "note": "timings 落库与 segArrivals 是产物扩展，不改 OFFLINE/SYSTEM 模式选择与分流职能（默认值/设置页选中态/RecordSession 分流条件均未动）",
+    "acked_at": "2026-10-31 22:57:19"
    },
    "app/src/main/java/com/tingsiwei/app/ui/RecordScreen.kt": {
     "sha1": "1b4fb247716fbfd8fd1e092ec3e2b7e2b25bbbfc",
     "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
     "acked_at": "2026-10-31 18:36:04"
+   },
+   "app/src/main/java/com/tingsiwei/app/record/RecordSession.kt": {
+    "sha1": "3a1d573dcad28cfd825532a66964c072eb2a9c3b",
+    "note": "timings 落库与 segArrivals 是产物扩展，不改 OFFLINE/SYSTEM 模式选择与分流职能（默认值/设置页选中态/RecordSession 分流条件均未动）",
+    "acked_at": "2026-10-31 22:57:19"
    }
   },
   "设置页模块总览.md": {
