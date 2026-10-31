@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -114,13 +115,13 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     var showVersions by remember { mutableStateOf(false) }
     val suggestion by vm.suggestion.collectAsState()
     val snackbar = remember { SnackbarHostState() }
-    val ttsMsg by vm.ttsMessage.collectAsState()
+    val ttsMsg by vm.uiMessage.collectAsState()
 
     LaunchedEffect(note?.id, note?.status) { vm.maybeRunPipeline() }
     LaunchedEffect(ttsMsg) {
         ttsMsg?.let {
             snackbar.showSnackbar(it)
-            vm.ttsMessage.value = null
+            vm.uiMessage.value = null
         }
     }
 
@@ -329,6 +330,7 @@ private fun MapTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Mod
             onController = { controller = it },
             modifier = Modifier.fillMaxSize(),
             darkTheme = isDark,
+            onPngReady = { base64 -> vm.exportPng(base64) },
         )
         // 画布上的浮层控制：半透明底板 + 图标，压在导图上不抢视线
         Row(
@@ -337,6 +339,7 @@ private fun MapTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Mod
         ) {
             CanvasToolButton(Icons.Filled.CenterFocusStrong, "居中") { controller?.toCenter() }
             CanvasToolButton(Icons.Filled.Undo, "撤销") { controller?.undo() }
+            CanvasToolButton(Icons.Filled.Image, "导出图片") { controller?.exportPng() }
         }
     }
 }
@@ -384,9 +387,12 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
             }
         } else {
             val ctx = LocalContext.current
+            // 按段落拆成独立列表项：整篇塞进单个 item 时几万字要一次性测量排版，Lazy 形同虚设
+            val paragraphs = remember(content) { content.split('\n').filter { it.isNotBlank() } }
             SelectionContainer {
                 LazyColumn(
                     Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     contentPadding = PaddingValues(
                         start = Spacing.screen,
                         end = Spacing.screen,
@@ -394,14 +400,15 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
                         bottom = Spacing.xl,
                     ),
                 ) {
-                    item {
+                    items(paragraphs.size) { i ->
                         Text(
-                            content,
+                            paragraphs[i],
                             style = MaterialTheme.typography.bodyLarge,
                             // 原文是长文，行距和段距都放宽，手机上更好读
                             lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
                         )
-                        Spacer(Modifier.height(Spacing.xl))
+                    }
+                    item {
                         OutlinedButton(
                             onClick = {
                                 val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -749,11 +756,11 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
     private var playerJob: Job? = null
 
     // TTS
-    private val tts by lazy { TtsPlayer(App.get()) { msg -> ttsMessage.value = msg } }
+    private val tts by lazy { TtsPlayer(App.get()) { msg -> uiMessage.value = msg } }
     val ttsSpeaking = MutableStateFlow(false)
     val ttsRate = MutableStateFlow(1.0f)
-    /** TtsPlayer 的可见提示（如"离线模型未下载，先用系统语音"），UI 弹 Snackbar */
-    val ttsMessage = MutableStateFlow<String?>(null)
+    /** TtsPlayer、播放器、恢复版本等本地操作的可见提示（如「离线模型未下载，先用系统语音」），UI 弹 Snackbar */
+    val uiMessage = MutableStateFlow<String?>(null)
 
     /** AI 建议输入框内容：放 ViewModel 是为了改图失败后建议不丢，成功才清空 */
     val suggestion = MutableStateFlow("")
@@ -832,6 +839,9 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
             localStage.value = "正在恢复版本…"
             try {
                 Generator(db, settingsRepo).restoreVersion(noteId, versionId)
+            } catch (e: Exception) {
+                // 磁盘满/数据库异常等：报给用户而不是闪退（此前无 catch，Room 写异常会让 App 直接崩）
+                uiMessage.value = "恢复版本失败：${e.message ?: "未知错误"}"
             } finally {
                 localStage.value = null
             }
@@ -847,6 +857,24 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         }
     }
 
+    /**
+     * 导图画布「导出图片」：WebView 把画布渲染成 PNG 回传 base64，落盘后调起系统分享。
+     * 这条链路此前只写了没接（onPngCb 空实现、无触发按钮），2026-10-31 接通。
+     */
+    fun exportPng(base64: String) {
+        viewModelScope.launch {
+            try {
+                val n = db.noteDao().byId(noteId) ?: return@launch
+                val ctx = App.get()
+                val bytes = withContext(Dispatchers.IO) { android.util.Base64.decode(base64, android.util.Base64.DEFAULT) }
+                val file = Exporter.savePng(ctx, bytes, n)
+                Exporter.shareFile(ctx, file, "image/png")
+            } catch (e: Exception) {
+                uiMessage.value = "导出图片失败：${e.message ?: "未知错误"}"
+            }
+        }
+    }
+
     // ---------- 播放 ----------
 
     fun togglePlay() {
@@ -858,9 +886,14 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
                 try {
                     val mp = withContext(Dispatchers.IO) {
                         val m = MediaPlayer()
-                        m.setDataSource(path)
-                        m.prepare()
-                        m
+                        try {
+                            m.setDataSource(path)
+                            m.prepare()
+                            m
+                        } catch (e: Exception) {
+                            m.release() // 半初始化的播放器也要放掉，否则 native 资源泄漏
+                            throw e
+                        }
                     }
                     mp.setOnCompletionListener {
                         playing.value = false
@@ -872,7 +905,9 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
                     playing.value = true
                     startTicker()
                 } catch (e: Exception) {
+                    // 此前静默吞掉：录音文件损坏/被清理时点播放毫无反应，用户不知道为什么
                     playing.value = false
+                    uiMessage.value = "音频播放失败：${e.message ?: "文件可能已损坏"}"
                 }
             } else if (p.isPlaying) {
                 p.pause()

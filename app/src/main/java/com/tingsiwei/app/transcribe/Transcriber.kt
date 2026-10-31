@@ -22,32 +22,28 @@ object Transcriber {
             throw IllegalStateException("离线识别模型还没下载，请到设置页下载")
         }
         onProgress(0f, "正在加载识别模型…")
-        val dir = SherpaTranscriber.modelDir(context).absolutePath
-        val transcriber = withContext(Dispatchers.Default) { SherpaTranscriber(dir) }
-        try {
-            val sb = StringBuilder()
-            var blocks = 0
-            val ctx = coroutineContext
-            withContext(Dispatchers.Default) {
-                AudioDecode.forEachChunk(
-                    audioPath,
-                    isCancelled = { !ctx.isActive },
-                    onProgress = { frac ->
-                        val pct = (frac * 100f).toInt().coerceIn(0, 100)
-                        onProgress(frac, "正在识别…已完成 $pct%，已识别 ${sb.length} 字（第 ${blocks + 1} 段）")
-                    },
-                ) { chunk ->
-                    val text = transcriber.recognizeChunk(chunk)
-                    if (text.isNotBlank()) {
-                        if (sb.isNotEmpty() && !sb.endsWith("\n")) sb.append('\n')
-                        sb.append(text)
-                    }
-                    blocks++
+        // 常驻单例：首次调用付一次模型加载，之后复用；不在这里 release（由设置页删模型时统一放掉）
+        val transcriber = withContext(Dispatchers.Default) { LocalAsrEngine.obtain(context) }
+        val sb = StringBuilder()
+        var blocks = 0
+        val ctx = coroutineContext
+        withContext(Dispatchers.Default) {
+            AudioDecode.forEachChunk(
+                audioPath,
+                isCancelled = { !ctx.isActive },
+                onProgress = { frac ->
+                    val pct = (frac * 100f).toInt().coerceIn(0, 100)
+                    onProgress(frac, "正在识别…已完成 $pct%，已识别 ${sb.length} 字（第 ${blocks + 1} 段）")
+                },
+            ) { chunk ->
+                val text = transcriber.recognizeChunk(chunk)
+                if (text.isNotBlank()) {
+                    if (sb.isNotEmpty() && !sb.endsWith("\n")) sb.append('\n')
+                    sb.append(text)
                 }
+                blocks++
             }
-            return sb.toString().trim()
-        } finally {
-            transcriber.release()
         }
+        return sb.toString().trim()
     }
 }

@@ -51,8 +51,31 @@ class SherpaTranscriber(modelDir: String, numThreads: Int = 2) {
 
         fun isModelReady(context: Context): Boolean {
             val dir = modelDir(context)
-            return File(dir, "model.int8.onnx").length() > 200_000_000 &&
+            // 门槛 = 声明的完整体积：旧判据 200MB 会把下载中断留下的半截文件当成「已就绪」
+            return File(dir, "model.int8.onnx").length() >= ModelManager.MODEL_BYTES &&
                 File(dir, "tokens.txt").length() > 100_000
+        }
+    }
+}
+
+/**
+ * 离线识别引擎单例：模型加载要几秒、session 占内存 ~230MB，加载一次常驻复用，
+ * 连续转写多篇（启动续跑时最明显）不再每篇白付一次加载。
+ * 与 tts.LocalTtsEngine 同一成例；设置页删除模型后必须调 [release]，否则内存里仍持有已删文件。
+ */
+object LocalAsrEngine {
+    @Volatile
+    private var instance: SherpaTranscriber? = null
+
+    fun obtain(context: Context): SherpaTranscriber =
+        instance ?: synchronized(this) {
+            instance ?: SherpaTranscriber(SherpaTranscriber.modelDir(context).absolutePath).also { instance = it }
+        }
+
+    fun release() {
+        synchronized(this) {
+            instance?.release()
+            instance = null
         }
     }
 }

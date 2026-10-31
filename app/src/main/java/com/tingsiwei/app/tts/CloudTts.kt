@@ -2,6 +2,7 @@ package com.tingsiwei.app.tts
 
 import android.util.Log
 import com.tingsiwei.app.data.TtsCloudProvider
+import com.tingsiwei.app.util.Http
 import com.tingsiwei.app.data.TtsElevenDefaults
 import com.tingsiwei.app.data.TtsEngine
 import kotlinx.serialization.json.buildJsonObject
@@ -332,8 +333,9 @@ private val WAV_RETRY_CODES = setOf(400, 404, 415, 422)
 
 object OkHttpCloudTtsTransport : CloudTtsTransport {
 
-    // readTimeout 是相邻两个字节包的最大间隔；流式合成持续出字节，30 秒足够宽容
-    private val client = OkHttpClient.Builder()
+    // readTimeout 是相邻两个字节包的最大间隔；流式合成持续出字节，30 秒足够宽容。
+    // 连接池与线程池继承 util.Http.base，与 LLM/模型下载共用
+    private val client = Http.base.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()

@@ -257,8 +257,10 @@ window.appBeginEdit = function () { var el = selectedEl(); if (el) mind.beginEdi
 window.appRemove = function () { var el = selectedEl(); if (el && !isRoot(el)) { mind.removeNode(el); setTimeout(updateButtons, 100); } };
 window.appMoveUp = function () { var el = selectedEl(); if (el && !isRoot(el)) mind.moveUpNode(el); };
 window.appMoveDown = function () { var el = selectedEl(); if (el && !isRoot(el)) mind.moveDownNode(el); };
-window.appUndo = function () { try { mind.undo(); } catch (e) {} setTimeout(updateButtons, 100); };
-window.appRedo = function () { try { mind.redo(); } catch (e) {} setTimeout(updateButtons, 100); };
+// 撤销/重做必须显式存盘：operation 监听只覆盖编辑动作，undo/redo 走的是历史栈不触发它，
+// 不补 scheduleSave 的话，撤销后退出重进会变回撤销前的样子
+window.appUndo = function () { try { mind.undo(); } catch (e) {} scheduleSave(); setTimeout(updateButtons, 100); };
+window.appRedo = function () { try { mind.redo(); } catch (e) {} scheduleSave(); setTimeout(updateButtons, 100); };
 window.appToCenter = function () { if (mind) mind.toCenter(); };
 window.appZoomIn = function () {
   if (!mind) return;

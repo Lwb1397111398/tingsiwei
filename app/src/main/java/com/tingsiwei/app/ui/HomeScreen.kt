@@ -75,6 +75,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
+import com.tingsiwei.app.data.db.NoteListItem
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.llm.SegmentStore
@@ -87,7 +88,8 @@ import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -112,7 +114,7 @@ fun HomeScreen(
     val snackbar = remember { SnackbarHostState() }
 
     var menuOpen by remember { mutableStateOf(false) }
-    var pendingDelete by remember { mutableStateOf<NoteEntity?>(null) }
+    var pendingDelete by remember { mutableStateOf<NoteListItem?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importAudio(uri)
@@ -373,7 +375,7 @@ private fun NewActionPill(icon: ImageVector, label: String, onClick: () -> Unit)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NoteEntity, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteCard(note: NoteListItem, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val busy = note.status == NoteStatus.TRANSCRIBING || note.status == NoteStatus.GENERATING
     Surface(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
@@ -397,7 +399,7 @@ private fun NoteCard(note: NoteEntity, stage: String?, onClick: () -> Unit, onLo
                     Spacer(Modifier.width(Spacing.sm))
                     StatusChip(note.status)
                 }
-                val preview = (note.thinking ?: note.content)?.trim().orEmpty()
+                val preview = note.preview?.trim().orEmpty()
                 if (preview.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -556,12 +558,15 @@ class HomeViewModel : ViewModel() {
     val query = MutableStateFlow("")
     val message = MutableStateFlow<String?>(null)
 
-    val notes = combine(db.noteDao().observeAll(), query) { list, q ->
-        if (q.isBlank()) list
-        else list.filter { it.title.contains(q, true) || (it.content?.contains(q, true) ?: false) }
+    // 轻量投影 + SQL 搜索：整篇原文/导图 JSON 不再拉进内存（旧实现 observeAll 全实体 + 内存过滤，
+    // 笔记多且长时首页常驻内存随内容线性膨胀）；有搜索词时切到 LIKE 查询
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val notes = query.flatMapLatest { q ->
+        if (q.isBlank()) db.noteDao().observeList()
+        else db.noteDao().searchList(q)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun delete(note: NoteEntity) {
+    fun delete(note: NoteListItem) {
         viewModelScope.launch(Dispatchers.IO) {
             // 还在转写/生成的笔记先停掉任务，避免它继续往已删除的笔记上写
             NoteProcessor.cancel(note.id)
@@ -576,7 +581,9 @@ class HomeViewModel : ViewModel() {
                 SegmentStore(File(App.get().filesDir, "pipeline")).clear(note.id)
             } catch (_: Exception) {
             }
-            db.noteDao().delete(note)
+            // 轻量投影只有路径等展示列，删除前取整实体（版本历史靠外键 CASCADE 一并清）
+            val full = db.noteDao().byId(note.id) ?: return@launch
+            db.noteDao().delete(full)
         }
     }
 

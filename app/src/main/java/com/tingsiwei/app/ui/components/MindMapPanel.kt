@@ -62,13 +62,8 @@ class MapController(private val webView: WebView) {
         eval("appSetColors(${jsonArg(lightThemeJson)}, ${jsonArg(darkThemeJson)})")
     fun setEditable(editable: Boolean) = eval("appSetEditable($editable)")
     fun undo() = eval("appUndo()")
-    fun redo() = eval("appRedo()")
     fun toCenter() = eval("appToCenter()")
     fun exportPng() = eval("appExportPng()")
-    fun zoomIn() = eval("appZoomIn()")
-    fun zoomOut() = eval("appZoomOut()")
-    fun zoomFit() = eval("appZoomFit()")
-    fun zoomReset() = eval("appZoomReset()")
 
     companion object {
         private val json = Json
@@ -89,11 +84,13 @@ fun MindMapPanel(
     onController: (MapController) -> Unit,
     modifier: Modifier = Modifier,
     darkTheme: Boolean = isSystemInDarkTheme(),
+    onPngReady: (String) -> Unit = {},
 ) {
     val latestOnMapChanged = rememberUpdatedState(onMapChanged)
     val latestOnController = rememberUpdatedState(onController)
     val latestEditable = rememberUpdatedState(editable)
     val latestDark = rememberUpdatedState(darkTheme)
+    val latestOnPng = rememberUpdatedState(onPngReady)
 
     var pageLoaded by remember { mutableStateOf(false) }
     // 最近一次本地产生的数据（自己拖动导致的变化不回推画布，防循环）
@@ -141,6 +138,7 @@ fun MindMapPanel(
                             latestOnMapChanged.value(json)
                         },
                         onLogCb = { Log.w("MindMap", it) },
+                        onPngCb = { base64 -> latestOnPng.value(base64) },
                     ),
                     "AndroidBridge",
                 )

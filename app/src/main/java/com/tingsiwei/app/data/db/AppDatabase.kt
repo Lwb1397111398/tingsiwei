@@ -26,8 +26,20 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE status IN (:statuses)")
     suspend fun byStatuses(statuses: List<String>): List<NoteEntity>
 
-    @Query("SELECT * FROM notes WHERE title LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%' ORDER BY updatedAt DESC")
-    fun search(q: String): Flow<List<NoteEntity>>
+    /** 首页轻量列表：整篇原文/导图 JSON 不进内存，只取卡片展示的列，预览在 SQL 里截 120 字 */
+    @Query(
+        "SELECT id, title, updatedAt, status, source, durationMs, audioPath, " +
+            "substr(COALESCE(thinking, content), 1, 120) AS preview FROM notes ORDER BY updatedAt DESC"
+    )
+    fun observeList(): Flow<List<NoteListItem>>
+
+    /** 搜索走 SQL LIKE，同样只取轻量列；旧的整实体版本已由它替代 */
+    @Query(
+        "SELECT id, title, updatedAt, status, source, durationMs, audioPath, " +
+            "substr(COALESCE(thinking, content), 1, 120) AS preview FROM notes " +
+            "WHERE title LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%' ORDER BY updatedAt DESC"
+    )
+    fun searchList(q: String): Flow<List<NoteListItem>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(note: NoteEntity): Long
@@ -50,8 +62,12 @@ interface VersionDao {
     @Insert
     suspend fun insert(version: VersionEntity): Long
 
-    @Delete
-    suspend fun delete(version: VersionEntity)
+    /** 每份快照都是整幅 mapJson 的拷贝，不封顶 versions 表会随改图/重生成无限膨胀：只留每篇最近 keep 份 */
+    @Query(
+        "DELETE FROM versions WHERE noteId = :noteId AND id NOT IN " +
+            "(SELECT id FROM versions WHERE noteId = :noteId ORDER BY createdAt DESC, id DESC LIMIT :keep)"
+    )
+    suspend fun pruneTo(noteId: Long, keep: Int)
 }
 
 // exportSchema=true：每次升版本在 app/schemas/ 生成 JSON 快照入库，表结构改动可 diff。

@@ -51,14 +51,14 @@ class LlmPolicyTest {
         var calls = 0
         val bodies = mutableListOf<String>()
         val times = mutableListOf<Long>()
-        override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+        override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
             calls++
             bodies.add(body)
             times.add(time.nowMs())
             return if (queue.isNotEmpty()) queue.removeAt(0) else Transport.RawResp(200, chatBody("兜底回复"), emptyMap())
         }
         // 单测只覆盖 chat 路径；listModels 走 GET 时不经此桩
-        override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+        override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
             throw AssertionError("单测不应触发 GET 请求")
     }
 
@@ -253,12 +253,12 @@ class LlmPolicyTest {
         val time = FakeTime()
         val flaky = object : Transport {
             var n = 0
-            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
                 n++
                 if (n == 1) throw LlmError.Network()
                 return Transport.RawResp(200, chatBody("正常回复"), emptyMap())
             }
-            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+            override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
                 throw AssertionError("单测不应触发 GET 请求")
         }
         val session = LlmSession(flaky, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(minIntervalMs = 0))
@@ -449,7 +449,7 @@ class LlmPolicyTest {
         val time = FakeTime()
         var n = 0
         val transport = object : Transport {
-            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
                 n++
                 if (n % 3 == 0) return resp(429, """{"error":{"message":"rate limit"}}""")
                 val user = Json.parseToJsonElement(body).jsonObject["messages"]!!.jsonArray[1]
@@ -461,7 +461,7 @@ class LlmPolicyTest {
                 }
                 return resp(200, chatBody(out.replace("\n", "\\n")))
             }
-            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+            override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
                 throw AssertionError("本测试不应触发 GET 请求")
         }
         val session = LlmSession(transport, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
@@ -488,11 +488,11 @@ class LlmPolicyTest {
         val time = FakeTime()
         var posts = 0
         val unauthorized = object : Transport {
-            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
                 posts++
                 return resp(401, """{"error":{"message":"invalid api key"}}""")
             }
-            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+            override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
                 throw AssertionError("本测试不应触发 GET 请求")
         }
         val session = LlmSession(unauthorized, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))
@@ -550,11 +550,11 @@ class LlmPolicyTest {
         val time = FakeTime()
         var method = ""
         val t = object : Transport {
-            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
                 method = "POST"
                 return Transport.RawResp(404, """{"error":{"code":5,"message":"NOT_FOUND"}}""", emptyMap())
             }
-            override fun get(url: String, headers: Map<String, String>): Transport.RawResp {
+            override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp {
                 method = "GET"
                 assertEquals("https://token.sensenova.cn/v1/models", url)
                 return Transport.RawResp(
@@ -574,9 +574,9 @@ class LlmPolicyTest {
     fun `m5 渠道不给模型列表时 404 要翻译成人话而不是让用户怀疑地址`() {
         val time = FakeTime()
         val notFound = object : Transport {
-            override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp =
+            override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp =
                 Transport.RawResp(404, "x", emptyMap())
-            override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+            override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
                 Transport.RawResp(404, """{"error":{"code":5,"message":"NOT_FOUND"}}""", emptyMap())
         }
         val session = LlmSession(notFound, RateGate(time, time), time, { 0.5 }, LlmSession.Policy(16384, 0L))

@@ -7,10 +7,13 @@ import kotlin.math.ceil
 /** HTTP 往来接缝：生产用 [OkHttpTransport]，单测注入假实现（不加任何测试依赖）。 */
 interface Transport {
     class RawResp(val code: Int, val body: String, val headers: Map<String, String>)
-    /** 只允许抛 [LlmError]，其余异常由 [LlmSession] 兜底归类为不可重试 */
-    fun post(url: String, headers: Map<String, String>, body: String): RawResp
+    /**
+     * 只允许抛 [LlmError]；其余异常由 [LlmSession] 兜底按**可重试的网络错误**归类（与实现的实际行为一致）。
+     * 挂起函数：生产实现协程被取消（用户点停止/删笔记）时会掐断在途请求，不再耗完读超时。
+     */
+    suspend fun post(url: String, headers: Map<String, String>, body: String): RawResp
     /** 模型列表等只读端点用 GET；OpenAI 兼容渠道对 POST /models 通常回 404 */
-    fun get(url: String, headers: Map<String, String>): RawResp
+    suspend fun get(url: String, headers: Map<String, String>): RawResp
 }
 
 interface Sleeper { suspend fun sleep(ms: Long) }

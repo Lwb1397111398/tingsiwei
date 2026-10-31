@@ -59,7 +59,6 @@ class TtsPlayer(
 
     val isSpeaking: Boolean get() = playing.get()
 
-    var onStateChange: (() -> Unit)? = null
 
     /**
      * engine 取 data.TtsEngine 的常量（"system" / "local" / "cloud"）；cloud 引擎需传 [cloud] 配置。
@@ -122,7 +121,6 @@ class TtsPlayer(
             systemTts?.stop()
         } catch (_: Exception) {
         }
-        onStateChange?.invoke()
     }
 
     fun shutdown() {
@@ -191,7 +189,6 @@ class TtsPlayer(
                 failSystemInit()
             }
             pendingSystemText = null
-            onStateChange?.invoke()
         }
         // 部分机型（如裸模拟器）没有任何引擎时初始化回调永远不回来，挂 6 秒就当失败处理
         scope.launch {
@@ -201,7 +198,6 @@ class TtsPlayer(
                 systemReady = false
                 failSystemInit()
                 pendingSystemText = null
-                onStateChange?.invoke()
             }
         }
     }
@@ -214,7 +210,7 @@ class TtsPlayer(
         systemTts = null
         if (pendingSystemText != null) {
             onMessage?.invoke("本机的系统语音不可用；可在设置里下载离线朗读模型")
-            if (playing.getAndSet(false)) onStateChange?.invoke()
+            playing.set(false)
         }
     }
 
@@ -249,7 +245,6 @@ class TtsPlayer(
         systemNext = 0
         t.setSpeechRate(rate)
         playing.set(true)
-        onStateChange?.invoke()
         enqueueNextSystemChunk(t)
     }
 
@@ -257,7 +252,7 @@ class TtsPlayer(
         if (!playing.get()) return
         val idx = systemNext
         if (idx >= systemChunks.size) {
-            if (playing.getAndSet(false)) onStateChange?.invoke()
+            playing.set(false)
             return
         }
         // 一次只投一条：队列里没有积压，调速重投也不会和旧块打架
@@ -268,7 +263,6 @@ class TtsPlayer(
 
     private fun speakLocal(text: String) {
         playing.set(true)
-        onStateChange?.invoke()
         localJob = scope.launch {
             var local: AudioTrack? = null
             try {
@@ -332,7 +326,7 @@ class TtsPlayer(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 return@launch // stop() 撞上收尾轮询：是正常停止，不是失败
             } catch (e: Exception) {
-                if (playing.getAndSet(false)) onStateChange?.invoke()
+                playing.set(false)
                 onMessage?.invoke("离线朗读失败：${e.message ?: "未知错误"}")
                 return@launch
             } finally {
@@ -346,7 +340,7 @@ class TtsPlayer(
                 }
                 track = null
             }
-            if (playing.getAndSet(false)) onStateChange?.invoke()
+            playing.set(false)
         }
     }
 
@@ -359,7 +353,6 @@ class TtsPlayer(
      */
     private fun speakCloud(text: String, cfg: CloudTtsConfig, fallback: Boolean) {
         playing.set(true)
-        onStateChange?.invoke()
         localJob = scope.launch {
             var local: AudioTrack? = null
             var cloudError: String? = null
@@ -427,7 +420,6 @@ class TtsPlayer(
                 // 试听场景（fallback=false）：失败只报准确原因，不静默换成别的声音——试听就是要验证在线通不通
                 if (!fallback) {
                     playing.set(false)
-                    onStateChange?.invoke()
                     onMessage?.invoke("在线朗读失败：$cloudError")
                     return@launch
                 }
@@ -441,14 +433,13 @@ class TtsPlayer(
                     else -> {
                         // 回落也没处落：把播放态收掉，别让 isSpeaking 卡在 true（试听循环会空转）
                         playing.set(false)
-                        onStateChange?.invoke()
                         "，且本机没有可用的离线或系统语音"
                     }
                 }
                 onMessage?.invoke("在线朗读失败：$cloudError$tail")
                 return@launch
             }
-            if (playing.getAndSet(false)) onStateChange?.invoke()
+            playing.set(false)
         }
     }
 }

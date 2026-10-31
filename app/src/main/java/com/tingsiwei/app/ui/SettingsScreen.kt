@@ -69,11 +69,13 @@ import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
 import com.tingsiwei.app.llm.LlmPolicy
+import com.tingsiwei.app.transcribe.LocalAsrEngine
 import com.tingsiwei.app.transcribe.ModelManager
 import com.tingsiwei.app.transcribe.SherpaTranscriber
 import com.tingsiwei.app.tts.CloudTts
 import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.ElevenTts
+import com.tingsiwei.app.tts.LocalTtsEngine
 import com.tingsiwei.app.tts.OkHttpCloudTtsTransport
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.ui.components.BusyLine
@@ -89,7 +91,11 @@ import com.tingsiwei.app.ui.components.ThinDivider
 import com.tingsiwei.app.ui.components.ToggleRow
 import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -749,6 +755,12 @@ class SettingsViewModel : ViewModel() {
     private val client = LlmClient(repo)
     private val context = App.get()
 
+    // 防抖落盘：输入框逐字符、滑杆逐帧的写入按组合并，600ms 内的连续改动只落一次盘。
+    // 三组各自独立计时，互不取消；关页时 onCleared 兜底补写一次（幂等），防抖窗口内的输入不丢。
+    private var cloudPersistJob: Job? = null
+    private var elevenPersistJob: Job? = null
+    private var ratePersistJob: Job? = null
+
     val url = MutableStateFlow("")
     val key = MutableStateFlow("")
     val model = MutableStateFlow("")
@@ -807,7 +819,8 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    fun refreshModelState() {
+    // 模型体积核查（TTS 300+ 文件、ASR 目录列目录）是磁盘 IO，必须挂 IO 线程，别卡主线程
+    suspend fun refreshModelState() = withContext(Dispatchers.IO) {
         val ready = SherpaTranscriber.isModelReady(context)
         modelState.value = if (ready) {
             ModelStateUi(ModelState.READY, bytes = ModelManager.totalBytes(context))
@@ -882,7 +895,12 @@ class SettingsViewModel : ViewModel() {
     fun setTtsRate(rate: Float) {
         ttsRate.value = rate
         if (previewSpeaking.value) previewTts.updateRate(rate)
-        viewModelScope.launch { repo.setTtsRate(rate) }
+        // 拖动滑杆一秒能出几十帧，落盘按 600ms 防抖合并；即时调速走上面的 updateRate 不受影响
+        ratePersistJob?.cancel()
+        ratePersistJob = viewModelScope.launch {
+            delay(600)
+            repo.setTtsRate(rate)
+        }
     }
 
     fun setTtsEngine(e: String) {
@@ -890,7 +908,7 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repo.setTtsEngine(e) }
     }
 
-    // 在线朗读三项改动即存，免去单独的保存按钮（避免「填了 Key 忘了保存」）
+    // 在线朗读三项改动即存，免去单独的保存按钮（避免「填了 Key 忘了保存」）；写入按 600ms 防抖合并
     fun setTtsCloudUrl(u: String) {
         ttsCloudUrl.value = u
         persistTtsCloud()
@@ -912,12 +930,14 @@ class SettingsViewModel : ViewModel() {
     }
 
     private fun persistTtsCloud() {
-        viewModelScope.launch {
+        cloudPersistJob?.cancel()
+        cloudPersistJob = viewModelScope.launch {
+            delay(600)
             repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
         }
     }
 
-    // 官方 ElevenLabs 档：服务档位与三项配置改动即存（与自定义档同惯例），两档互不覆盖
+    // 官方 ElevenLabs 档：服务档位与三项配置改动即存（与自定义档同惯例），两档互不覆盖；写入同 600ms 防抖
     fun setTtsCloudProvider(p: String) {
         ttsCloudProvider.value = p
         viewModelScope.launch { repo.setTtsCloudProvider(p) }
@@ -939,7 +959,9 @@ class SettingsViewModel : ViewModel() {
     }
 
     private fun persistTtsEleven() {
-        viewModelScope.launch {
+        elevenPersistJob?.cancel()
+        elevenPersistJob = viewModelScope.launch {
+            delay(600)
             repo.setTtsEleven(ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value)
         }
     }
@@ -998,7 +1020,7 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    fun refreshTtsModelState() {
+    suspend fun refreshTtsModelState() = withContext(Dispatchers.IO) {
         val ready = ModelManager.isTtsReady(context)
         ttsModelState.value = if (ready) {
             TtsModelStateUi(TtsModelState.READY, bytes = ModelManager.ttsDownloadedBytes(context))
@@ -1050,12 +1072,33 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun deleteTtsModel() {
-        ModelManager.deleteTtsModel(context)
-        refreshTtsModelState()
-        message.value = "已删除离线朗读模型"
+        viewModelScope.launch {
+            // 215MB、300+ 个文件的递归删除是秒级 IO，主线程做会触发系统「无响应」
+            withContext(Dispatchers.IO) { ModelManager.deleteTtsModel(context) }
+            // 删了文件就把常驻离线引擎一起放掉：否则内存里还压着 ~114MB 的已加载模型，「删了还能读」
+            LocalTtsEngine.release()
+            refreshTtsModelState()
+            message.value = "已删除离线朗读模型"
+        }
     }
 
-    private val previewTts by lazy { TtsPlayer(context) { msg -> message.value = msg } }
+    private var previewTtsHolder: TtsPlayer? = null
+    private val previewTts: TtsPlayer
+        get() = previewTtsHolder
+            ?: TtsPlayer(context) { msg -> message.value = msg }.also { previewTtsHolder = it }
+
+    override fun onCleared() {
+        // 离开设置页必须关停试听引擎：不关的话系统 TTS 实例与内部协程每次进出泄漏一份
+        previewTtsHolder?.shutdown()
+        previewTtsHolder = null
+        // viewModelScope 已取消，防抖窗口里没落盘的输入用独立 scope 补写一次（同值幂等，代价一次关页三行写）
+        val flush = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        flush.launch {
+            repo.setTtsRate(ttsRate.value)
+            repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+            repo.setTtsEleven(ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value)
+        }
+    }
 
     fun togglePreview() {
         if (previewSpeaking.value) {
@@ -1118,7 +1161,7 @@ class SettingsViewModel : ViewModel() {
                 ModelManager.downloadFile(context, "tokens.txt", ModelManager.TOKENS_URL, 100_000) { _, _ -> }
                 message.value = "正在下载识别模型（约 230MB，断了再点会续传）…"
                 ModelManager.downloadFile(
-                    context, "model.int8.onnx", ModelManager.MODEL_URL, 200_000_000
+                    context, "model.int8.onnx", ModelManager.MODEL_URL, ModelManager.MODEL_BYTES
                 ) { done, total ->
                     modelState.value = modelState.value.copy(
                         downloaded = done,
@@ -1136,8 +1179,12 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun deleteModel() {
-        ModelManager.deleteModel(context)
-        refreshModelState()
-        message.value = "已删除离线模型"
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ModelManager.deleteModel(context) }
+            // 删了文件就把常驻识别引擎放掉，否则内存里仍压着 ~230MB 的已加载模型
+            LocalAsrEngine.release()
+            refreshModelState()
+            message.value = "已删除离线模型"
+        }
     }
 }

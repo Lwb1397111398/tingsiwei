@@ -53,13 +53,24 @@ class ProcessingService : Service() {
         if (!observing) {
             observing = true
             scope.launch {
+                var lastText: String? = null
+                var lastNotified = 0L
                 NoteProcessor.stages.collect { stages ->
                     // 停止条件必须是「无进度且无活跃任务」：进度流的第一帧可能先于任务的
-                    // 首个阶段文案到达，单看空表会在任务刚起步时误停（竞态已实测踩过）
+                    // 首个阶段文案到达，单看空表会在任务刚起步时误停（竞态已实测踩过）。
+                    // 停止判断不走节流，保证任务一结束服务立刻收摊
                     if (stages.isEmpty() && !NoteProcessor.anyBusy()) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
-                    } else {
+                        return@collect
+                    }
+                    // 转写时每个解码块都推进度（每秒可多次），通知重绘限到 500ms 一次：省电省 IPC，
+                    // 顺带避免首页/详情页订阅方跟着高频重组。文案没变就不重发
+                    val text = stages.values.firstOrNull() ?: "转写或生成进行中…"
+                    val now = System.currentTimeMillis()
+                    if (text != lastText && now - lastNotified >= NOTIF_MIN_INTERVAL_MS) {
+                        lastText = text
+                        lastNotified = now
                         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                         nm.notify(NOTIF_ID, buildNotification(stages))
                     }
@@ -92,6 +103,9 @@ class ProcessingService : Service() {
     companion object {
         private const val CHANNEL_ID = "processing_channel"
         private const val NOTIF_ID = 1002
+
+        /** 通知栏重绘的最小间隔：转写进度每秒可推进多次，全部照发纯属耗电 */
+        private const val NOTIF_MIN_INTERVAL_MS = 500L
 
         /** 有任务开跑时拉起（幂等：服务已在跑时只是再走一次 onStartCommand，刷新通知） */
         fun ensureRunning(context: Context) {

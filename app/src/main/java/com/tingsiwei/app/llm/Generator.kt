@@ -55,17 +55,7 @@ class Generator(
             val forest = TreeText.parse(outcome.mapText)
             if (forest.isEmpty()) throw LlmException("AI 返回的导图是空的，请重试或在设置里换个模型")
             // 覆盖前存一份快照：重新生成绝不能把用户手动整理过的导图弄丢
-            note.mapJson?.let { old ->
-                db.versionDao().insert(
-                    VersionEntity(
-                        noteId = note.id,
-                        createdAt = now(),
-                        mapJson = old,
-                        thinking = note.thinking,
-                        virtualRoot = note.virtualRoot,
-                    )
-                )
-            }
+            note.mapJson?.let { old -> saveSnapshot(note.id, old, note.thinking, note.virtualRoot) }
             val (mapJson, virtualRoot) = TreeText.toMapData(forest, note.title)
             settings.setLastGoodModel(cfg.llmModel)
             dao.update(
@@ -93,15 +83,7 @@ class Generator(
             return
         }
         // 修改前存版本快照，可回退
-        db.versionDao().insert(
-            VersionEntity(
-                noteId = note.id,
-                createdAt = now(),
-                mapJson = oldMap,
-                thinking = note.thinking,
-                virtualRoot = note.virtualRoot,
-            )
-        )
+        saveSnapshot(note.id, oldMap, note.thinking, note.virtualRoot)
         dao.update(note.copy(status = NoteStatus.GENERATING, errorMsg = null, updatedAt = now()))
         try {
             onStage("正在按你的要求修改…")
@@ -178,17 +160,7 @@ class Generator(
         val note = dao.byId(noteId) ?: return false
         val version = db.versionDao().byId(versionId) ?: return false
         // 回退前把当前状态也存一份快照，方便再切回来
-        note.mapJson?.let {
-            db.versionDao().insert(
-                VersionEntity(
-                    noteId = note.id,
-                    createdAt = now(),
-                    mapJson = it,
-                    thinking = note.thinking,
-                    virtualRoot = note.virtualRoot,
-                )
-            )
-        }
+        note.mapJson?.let { saveSnapshot(note.id, it, note.thinking, note.virtualRoot) }
         dao.update(
             note.copy(
                 mapJson = version.mapJson,
@@ -343,7 +315,27 @@ class Generator(
 
     private fun now(): Long = System.currentTimeMillis()
 
+    /**
+     * 存版本快照的统一入口：插完顺手把本篇裁到最近 [VERSION_KEEP] 份。
+     * 每份快照都是整幅 mapJson 的拷贝，之前只进不出，versions 表会随改图/重生成无限膨胀。
+     */
+    private suspend fun saveSnapshot(noteId: Long, mapJson: String, thinking: String?, virtualRoot: Boolean) {
+        db.versionDao().insert(
+            VersionEntity(
+                noteId = noteId,
+                createdAt = now(),
+                mapJson = mapJson,
+                thinking = thinking,
+                virtualRoot = virtualRoot,
+            )
+        )
+        db.versionDao().pruneTo(noteId, VERSION_KEEP)
+    }
+
     private companion object {
         const val FinalOutTokens = LongTextPipeline.FinalOutTokens
+
+        /** 每篇笔记保留的版本快照上限（详情页时钟图标里可回退的份数） */
+        const val VERSION_KEEP = 20
     }
 }

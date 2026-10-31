@@ -18,12 +18,12 @@ class LlmSessionStreamTest {
 
     private class StaticTransport(private val body: String, private val code: Int = 200) : Transport {
         var lastBody: String? = null
-        override fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
+        override suspend fun post(url: String, headers: Map<String, String>, body: String): Transport.RawResp {
             lastBody = body
             return Transport.RawResp(code, this.body, emptyMap())
         }
 
-        override fun get(url: String, headers: Map<String, String>): Transport.RawResp =
+        override suspend fun get(url: String, headers: Map<String, String>): Transport.RawResp =
             Transport.RawResp(code, body, emptyMap())
     }
 

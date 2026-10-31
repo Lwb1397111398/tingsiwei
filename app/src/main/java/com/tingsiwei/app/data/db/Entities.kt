@@ -42,6 +42,21 @@ data class NoteEntity(
     val errorMsg: String? = null,
 )
 
+/**
+ * 首页卡片的轻量投影：不把整篇原文和整份导图 JSON 拉进内存，只取卡片要展示的列。
+ * preview = 思路或原文的前 120 字（SQL 里截好），由 NoteDao.observeList/searchList 填充。
+ */
+data class NoteListItem(
+    val id: Long,
+    val title: String,
+    val updatedAt: Long,
+    val status: String,
+    val source: String,
+    val durationMs: Long = 0,
+    val audioPath: String? = null,
+    val preview: String? = null,
+)
+
 @Entity(
     tableName = "versions",
     foreignKeys = [

@@ -122,33 +122,37 @@ class SettingsRepository(private val context: Context) {
         val windowMigrated = booleanPreferencesKey("llm_window_migrated_1_3")
     }
 
-    val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
-        AppSettings(
-            llmUrl = p[K.llmUrl] ?: "",
-            llmKey = p[K.llmKey] ?: "",
-            llmModel = p[K.llmModel] ?: "",
-            transcribeMode = p[K.transcribeMode] ?: TranscribeMode.OFFLINE,
-            allowExpand = p[K.allowExpand] ?: true,
-            ttsRate = p[K.ttsRate] ?: 1.0f,
-            llmContextWindow = p[K.llmContextWindow] ?: LlmPolicy.DEFAULT_CONTEXT_WINDOW,
-            llmMinIntervalMs = p[K.llmMinIntervalMs] ?: LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
-            llmConservative = p[K.llmConservative] ?: false,
-            llmStagedThinking = p[K.llmStagedThinking] ?: false,
-            ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
-            ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
-            ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
-            ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
-            ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
-            ttsCloudProvider = p[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
-            ttsElevenKey = p[K.ttsElevenKey].orEmpty(),
-            ttsElevenVoice = p[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
-            ttsElevenModel = p[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
-            lastGoodModel = p[K.lastGoodModel],
-            hasGithubToken = p[K.githubToken] != null,
-            updateAutoCheck = p[K.updateAutoCheck] != false,
-            updateApiBase = p[K.updateApiBase].orEmpty(),
-        )
-    }
+    /**
+     * 唯一的 DataStore → AppSettings 映射，settings 流与 [current] 共用。
+     * 此前是两份 25 字段的手抄映射，加新设置漏改任何一处 = 字段静默回落默认值，且编译器不报错。
+     */
+    private fun androidx.datastore.preferences.core.Preferences.toAppSettings(): AppSettings = AppSettings(
+        llmUrl = this[K.llmUrl] ?: "",
+        llmKey = this[K.llmKey] ?: "",
+        llmModel = this[K.llmModel] ?: "",
+        transcribeMode = this[K.transcribeMode] ?: TranscribeMode.OFFLINE,
+        allowExpand = this[K.allowExpand] ?: true,
+        ttsRate = this[K.ttsRate] ?: 1.0f,
+        llmContextWindow = this[K.llmContextWindow] ?: LlmPolicy.DEFAULT_CONTEXT_WINDOW,
+        llmMinIntervalMs = this[K.llmMinIntervalMs] ?: LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
+        llmConservative = this[K.llmConservative] ?: false,
+        llmStagedThinking = this[K.llmStagedThinking] ?: false,
+        ttsEngine = this[K.ttsEngine] ?: TtsEngine.SYSTEM,
+        ttsCloudUrl = this[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
+        ttsCloudKey = this[K.ttsCloudKey].orEmpty(),
+        ttsCloudVoice = this[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
+        ttsCloudModel = this[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
+        ttsCloudProvider = this[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
+        ttsElevenKey = this[K.ttsElevenKey].orEmpty(),
+        ttsElevenVoice = this[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
+        ttsElevenModel = this[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
+        lastGoodModel = this[K.lastGoodModel],
+        hasGithubToken = this[K.githubToken] != null,
+        updateAutoCheck = this[K.updateAutoCheck] != false,
+        updateApiBase = this[K.updateApiBase].orEmpty(),
+    )
+
+    val settings: Flow<AppSettings> = context.dataStore.data.map { it.toAppSettings() }
 
     /**
      * 所有跑管线的读取都走这里（而不是 settings Flow），因此迁移只在这一处生效：
@@ -163,31 +167,7 @@ class SettingsRepository(private val context: Context) {
             }
             return settings.first()
         }
-        return AppSettings(
-            llmUrl = p[K.llmUrl] ?: "",
-            llmKey = p[K.llmKey] ?: "",
-            llmModel = p[K.llmModel] ?: "",
-            transcribeMode = p[K.transcribeMode] ?: TranscribeMode.OFFLINE,
-            allowExpand = p[K.allowExpand] ?: true,
-            ttsRate = p[K.ttsRate] ?: 1.0f,
-            llmContextWindow = p[K.llmContextWindow] ?: LlmPolicy.DEFAULT_CONTEXT_WINDOW,
-            llmMinIntervalMs = p[K.llmMinIntervalMs] ?: LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
-            llmConservative = p[K.llmConservative] ?: false,
-            llmStagedThinking = p[K.llmStagedThinking] ?: false,
-            ttsEngine = p[K.ttsEngine] ?: TtsEngine.SYSTEM,
-            ttsCloudUrl = p[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
-            ttsCloudKey = p[K.ttsCloudKey].orEmpty(),
-            ttsCloudVoice = p[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
-            ttsCloudModel = p[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
-            ttsCloudProvider = p[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
-            ttsElevenKey = p[K.ttsElevenKey].orEmpty(),
-            ttsElevenVoice = p[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
-            ttsElevenModel = p[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
-            lastGoodModel = p[K.lastGoodModel],
-            hasGithubToken = p[K.githubToken] != null,
-            updateAutoCheck = p[K.updateAutoCheck] != false,
-            updateApiBase = p[K.updateApiBase].orEmpty(),
-        )
+        return p.toAppSettings()
     }
 
     suspend fun setLlm(url: String, key: String, model: String) {

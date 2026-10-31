@@ -1,6 +1,7 @@
 package com.tingsiwei.app.transcribe
 
 import android.content.Context
+import com.tingsiwei.app.util.Http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -412,8 +413,8 @@ object ModelManager {
     /** 全部文件的总字节数（约 215MB），用作整体进度分母 */
     val TTS_TOTAL_BYTES: Long = TTS_FILES.sumOf { it.bytes }
 
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
+    // 连接超时继承 util.Http.base（20s）；下载大文件读超时放宽到 60 秒
+    private val http: OkHttpClient = Http.base.newBuilder()
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
