@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
-    "note": "本次仅重排设置页更新卡的视觉与控件样式，UpdateChecker/UpdateInstaller/UpdateViewModel/CI 链路零改动",
-    "acked_at": "2026-10-25 16:03:59"
+    "sha1": "77102c9a8b2ecfb2d3c80e5c23ec9ac301572660",
+    "note": "2026-10-31 设置页改动只涉试听引擎关停/删模型/防抖/模型状态IO化，应用自更新卡（检查/下载/安装/令牌）零触碰",
+    "acked_at": "2026-10-31 16:07:52"
    }
   },
   "转写模式选择模块总览.md": {
