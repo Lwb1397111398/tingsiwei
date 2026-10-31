@@ -34,8 +34,8 @@
   .tb-row { display: flex; gap: 1px; justify-content: center; }
   .tb-sep { height: 1px; margin: 1px 6px; background: var(--tb-border); }
   #toolbar button {
-    border: none; background: transparent; color: var(--tb-fg); font-size: 12.5px;
-    min-width: 40px; height: 32px; border-radius: 9px; padding: 0 6px;
+    border: none; background: transparent; color: var(--tb-fg); font-size: 13px;
+    min-width: 36px; height: 34px; border-radius: 9px; padding: 0 4px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
       "Microsoft YaHei", system-ui, sans-serif;
   }
@@ -46,19 +46,51 @@
   body.dark me-parent me-epd { filter: invert(1) brightness(1.6); }
 
   /* 节点排版：中文行距与圆角，和 App 其他页面的观感统一。
-     根节点字号从 25px 收到 19px——长标题在手机上 25px 会占满半屏 */
+     根 20px / 一级分支 17px 加粗 / 子级 16px——层级一眼可辨；
+     内边距比 mind-elixir 默认宽，中文不贴边 */
   me-tpc { line-height: 1.55; }
-  me-root me-tpc { font-size: 19px !important; font-weight: 600; letter-spacing: .2px;
-    padding: 9px 22px !important; }
-  me-main > me-wrapper > me-parent > me-tpc { font-weight: 500; }
-  me-main > me-wrapper > me-parent > me-tpc,
-  me-children me-parent > me-tpc { padding: 4px 6px !important; }
+  me-root me-tpc { font-size: 20px !important; font-weight: 600; letter-spacing: .2px;
+    padding: 10px 24px !important; }
+  me-main > me-wrapper > me-parent > me-tpc { font-size: 17px; font-weight: 600;
+    padding: 6px 14px !important; }
+  me-children me-parent > me-tpc { padding: 5px 10px !important; }
+
+  /* 展开/收起圆钮：mind-elixir 自带图标是 data:text/plain 的 base64 SVG，
+     本机 WebView 不渲染（元素在、背景图不画），改用纯 CSS 画圆 + 加减号；
+     同时把 18px 放大到 26px——画布缩放后 18px 只剩 10px，看不见也点不中 */
+  .map-container me-parent me-epd {
+    width: 26px; height: 26px; opacity: 1;
+    background-image: none;
+    background-color: var(--main-bgcolor, #fff);
+    border: 1px solid var(--panel-border-color, #ccc);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(24,37,42,.14);
+  }
+  .map-container me-parent me-epd::before {
+    content: '+'; position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1; font-weight: 600; color: var(--color, #5A676C);
+  }
+  .map-container me-parent me-epd.minus { opacity: 1; }
+  .map-container me-parent me-epd.minus::before { content: '−'; }
+  .map-container me-parent me-epd::after {
+    content: ''; position: absolute; left: -7px; top: -7px; right: -7px; bottom: -7px;
+  }
+  .map-container me-main > me-wrapper > me-parent > me-epd { top: calc(50% - 13px); }
+  .map-container me-epd { top: calc(100% - 13px); }
+  .map-container .lhs > me-wrapper > me-parent > me-epd { left: -13px; }
+  .map-container .rhs > me-wrapper > me-parent > me-epd { right: -13px; }
+  .map-container me-nodes.down me-epd,
+  .map-container me-nodes.down > me-main > me-wrapper > me-parent > me-epd {
+    top: calc(100% - 13px); left: calc(50% - 13px); right: auto;
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="toolbar">
-  <!-- 两行分组：上行改结构，下行改视图。原来 13 个按钮挤一行，手机上要换行且分不清哪组是哪组 -->
+  <!-- 两行分组：上行改结构，下行改视图。缩放/视图类按钮里，「收拢/全开」是手机上
+     看大图的主力操作；1:1 按钮已删（智能收起后首屏不再是全展开小字场景） -->
   <div class="tb-row">
     <button id="btChild">＋子节点</button>
     <button id="btSibling">＋同级</button>
@@ -74,7 +106,8 @@
     <button id="btZoomOut">－</button>
     <button id="btZoomIn">＋</button>
     <button id="btFit">适应</button>
-    <button id="btReset">1:1</button>
+    <button id="btExpand">全开</button>
+    <button id="btCollapse">收拢</button>
     <button id="btCenter">居中</button>
   </div>
 </div>
@@ -84,8 +117,11 @@ var ME = MECore.default;
 var mind = null;
 var dark = false;
 var saveTimer = null;
-// 「适应屏幕」的最小缩放：再小字就看不清了，宁可让用户平移。0.45 ≈ 正文 6px 的临界
+// 「适应屏幕」的最小缩放：再小字就看不清了，宁可让用户平移。0.55 ≈ 正文 9px 的临界
 var MIN_FIT = 0.55;
+// 首屏「看得清」的目标缩放。手机竖屏 SIDE 布局下宽度=左列+根+右列，实测一屏
+// 最多到 0.55~0.6 倍，0.72 这类桌面标准在手机上达不到；0.58 ≈ 一级分支 17px×0.58≈10px
+var READABLE_SCALE = 0.58;
 
 // 不依赖 CSS 高度百分比链（部分 WebView 上 body{height:100%} 不生效），全部用像素钉死
 function fixSize() {
@@ -129,6 +165,69 @@ function scheduleSave() {
       AndroidBridge.onMapChanged(JSON.stringify(mind.getData()));
     } catch (e) { console.error(e); }
   }, 500);
+}
+
+// ---- 智能视图：大图先看骨架，再钻细节 ----
+
+function countNodes(n) {
+  var c = 1, ch = n.children || [];
+  for (var i = 0; i < ch.length; i++) c += countNodes(ch[i]);
+  return c;
+}
+
+/** 带子节点的节点按深度决定展开与否：depth < minDepth 展开，其余收起 */
+function setViewDepth(node, minDepth, depth) {
+  if (node.children && node.children.length) {
+    node.expanded = depth < minDepth;
+    for (var i = 0; i < node.children.length; i++) setViewDepth(node.children[i], minDepth, depth + 1);
+  }
+}
+
+function setAllExpanded(node, val) {
+  if (node.children && node.children.length) {
+    node.expanded = val;
+    for (var i = 0; i < node.children.length; i++) setAllExpanded(node.children[i], val);
+  }
+}
+
+/** 适应屏幕并居中；返回钳制前的原始 fit 值（收起决策要用真值，不能用钳制后的） */
+function fitNow() {
+  try {
+    mind.scaleFit();
+    var raw = mind.scaleVal;
+    if (raw < MIN_FIT) mind.scale(MIN_FIT);
+    mind.toCenter();
+    return raw;
+  } catch (e) { return MIN_FIT; }
+}
+
+/**
+ * 首屏自适应：先整图适应，缩放低于可读线且节点够多时逐级收起深层
+ * （全展开 → 二级可见 → 一级可见）。三级都达不到可读线时退回「二级可见」：
+ * 这时它与一级档同样被 MIN_FIT 钳在 0.55、观感相同，但多显示一层内容。
+ * 收起是视图行为，不回传存库。
+ */
+function applyAdaptiveView(data) {
+  if (!mind) return;
+  var raw = fitNow();
+  var total = countNodes(data.nodeData);
+  if (raw >= READABLE_SCALE || total <= 15) { setTimeout(fitNow, 350); return; }
+  setViewDepth(data.nodeData, 2, 0);
+  mind.refresh(data);
+  setTimeout(function () {
+    raw = fitNow();
+    if (raw >= READABLE_SCALE) { setTimeout(fitNow, 350); return; }
+    setViewDepth(data.nodeData, 1, 0);
+    mind.refresh(data);
+    setTimeout(function () {
+      raw = fitNow();
+      if (raw < READABLE_SCALE) {
+        setViewDepth(data.nodeData, 2, 0);
+        mind.refresh(data);
+      }
+      setTimeout(fitNow, 350);
+    }, 80);
+  }, 80);
 }
 
 function applyDark() {
@@ -207,20 +306,17 @@ window.appInit = function (jsonText, darkMode) {
     try { mind.install(ME.operationHistory); } catch (e) { console.log('install history fail: ' + e); }
     var err = mind.init(data);
     console.log('init result: ' + err);
-    // 首次打开自动适应屏幕：否则大图会停在左上角，用户得自己捏合缩放才看得见全貌。
-    // 但整图缩放到超过「字看不清」就没意义了——低于 MIN_FIT 就停在 MIN_FIT，宁可让用户平移
-    setTimeout(function () {
-      try {
-        mind.scaleFit();
-        if (mind.scaleVal < MIN_FIT) mind.scale(MIN_FIT);
-        mind.toCenter();
-        // 缩放后布局要等一帧才稳定，再居一次，否则大图会偏到一侧
-        setTimeout(function () { try { mind.toCenter(); } catch (e) {} }, 200);
-      } catch (e) {}
-    }, 80);
+    // 首屏智能视图：先适应，读不清就逐级收起深层分支（原先只做 scaleFit+下限，
+    // 大图缩到 0.55 倍两头不讨好——装不进一屏且字看不清）
+    setTimeout(function () { applyAdaptiveView(data); }, 80);
     if (dark) applyDark();
     try {
       mind.bus.addListener('operation', function () { scheduleSave(); updateButtons(); });
+      // 展开/收起分支后，若节点跑出视野（含 50px 边距）就平移回中央——
+      // 大图上点开一根分支，新内容常在屏幕外，不拉回来用户会以为没点上
+      mind.bus.addListener('expandNode', function (n) {
+        try { if (n && mind.scrollIntoView) mind.scrollIntoView(n); } catch (e) {}
+      });
     } catch (e) { console.log('bus fail: ' + e); }
     setTimeout(function () { updateButtons(); }, 60);
   } catch (e) {
@@ -233,8 +329,8 @@ window.appSetData = function (jsonText) {
   try {
     var data = JSON.parse(jsonText);
     mind.refresh(data);
-    // AI 重写内容后让整图适应屏幕，保证新导图一眼能看全
-    setTimeout(function () { try { mind.scaleFit(); mind.toCenter(); } catch (e) {} }, 50);
+    // AI 重写后同样走智能视图：能看清就看全貌，看不清就收起深层
+    setTimeout(function () { applyAdaptiveView(data); }, 50);
   } catch (e) { console.log('setData fail: ' + e); }
 };
 
@@ -270,14 +366,30 @@ window.appZoomOut = function () {
   if (!mind) return;
   try { mind.scale(Math.max(mind.scaleMin, mind.scaleVal - mind.scaleSensitivity)); } catch (e) {}
 };
-// 「适应」按钮是用户主动要求看全貌，不加最小缩放限制（首次打开才加，见 appInit）
+// 「适应」按钮是用户主动要求看全貌，不加最小缩放限制（首屏才加，见 applyAdaptiveView）
 window.appZoomFit = function () {
   if (!mind) return;
   try { mind.scaleFit(); mind.toCenter(); } catch (e) {}
 };
-window.appZoomReset = function () {
+
+// 全开 / 收拢：只动视图不回传存库（收起状态跟随下一次真实编辑顺带落库）
+window.appExpandAll = function () {
   if (!mind) return;
-  try { mind.scale(1); mind.toCenter(); } catch (e) {}
+  try {
+    var d = mind.getData();
+    setAllExpanded(d.nodeData, true);
+    mind.refresh(d);
+    setTimeout(fitNow, 80);
+  } catch (e) { console.log('expandAll fail: ' + e); }
+};
+window.appCollapseView = function () {
+  if (!mind) return;
+  try {
+    var d = mind.getData();
+    setViewDepth(d.nodeData, 2, 0);
+    mind.refresh(d);
+    setTimeout(fitNow, 80);
+  } catch (e) { console.log('collapse fail: ' + e); }
 };
 
 window.appExportPng = function () {
@@ -308,7 +420,29 @@ document.getElementById('btCenter').onclick = function () { window.appToCenter()
 document.getElementById('btZoomIn').onclick = function () { window.appZoomIn(); };
 document.getElementById('btZoomOut').onclick = function () { window.appZoomOut(); };
 document.getElementById('btFit').onclick = function () { window.appZoomFit(); };
-document.getElementById('btReset').onclick = function () { window.appZoomReset(); };
+document.getElementById('btExpand').onclick = function () { window.appExpandAll(); };
+document.getElementById('btCollapse').onclick = function () { window.appCollapseView(); };
+
+// 展开/收起圆钮：库把切换绑在 click 上，触摸端该事件时有时无；这里统一在
+// pointerup 捕获阶段自行展开，click 捕获阶段把事件拦下（stopPropagation），
+// 库的处理器不再触发——两端都恰好切换一次
+document.getElementById('map').addEventListener('pointerup', function (u) {
+  var t = u.target;
+  while (t && t !== document && t.tagName !== 'ME-EPD') t = t.parentElement;
+  if (t && t.tagName === 'ME-EPD') {
+    var now = Date.now();
+    if (!t.__lastToggle || now - t.__lastToggle > 400) {
+      t.__lastToggle = now;
+      try { mind.expandNode(t.previousSibling); } catch (e) { console.log('epd expand fail: ' + e); }
+      setTimeout(updateButtons, 100);
+    }
+  }
+}, true);
+document.getElementById('map').addEventListener('click', function (c) {
+  var t = c.target;
+  while (t && t !== document && t.tagName !== 'ME-EPD') t = t.parentElement;
+  if (t && t.tagName === 'ME-EPD') { c.stopPropagation(); c.preventDefault(); }
+}, true);
 
 document.addEventListener('click', function () {
   setTimeout(updateButtons, 80);

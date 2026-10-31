@@ -41,7 +41,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
@@ -50,7 +49,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -380,13 +378,10 @@ private fun MapTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Mod
             darkTheme = isDark,
             onPngReady = { base64 -> vm.exportPng(base64) },
         )
-        // 画布上的浮层控制：半透明底板 + 图标，压在导图上不抢视线
+        // 画布浮层只留「导出图片」：撤销/居中在底部工具条里都有，不再重复占画布空间
         Row(
             modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.md),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            CanvasToolButton(Icons.Filled.CenterFocusStrong, "居中") { controller?.toCenter() }
-            CanvasToolButton(Icons.Filled.Undo, "撤销") { controller?.undo() }
             CanvasToolButton(Icons.Filled.Image, "导出图片") { controller?.exportPng() }
         }
     }

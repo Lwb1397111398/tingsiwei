@@ -61,8 +61,6 @@ class MapController(private val webView: WebView) {
     fun setColors(lightThemeJson: String, darkThemeJson: String) =
         eval("appSetColors(${jsonArg(lightThemeJson)}, ${jsonArg(darkThemeJson)})")
     fun setEditable(editable: Boolean) = eval("appSetEditable($editable)")
-    fun undo() = eval("appUndo()")
-    fun toCenter() = eval("appToCenter()")
     fun exportPng() = eval("appExportPng()")
 
     companion object {

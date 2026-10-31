@@ -188,9 +188,9 @@ data class MapColors(
               "palette": $palette,
               "toolbar": $toolbar,
               "cssVar": {
-                "--node-gap-x": "28px",
-                "--node-gap-y": "10px",
-                "--main-gap-x": "60px",
+                "--node-gap-x": "20px",
+                "--node-gap-y": "8px",
+                "--main-gap-x": "40px",
                 "--main-gap-y": "40px",
                 "--root-radius": "24px",
                 "--main-radius": "14px",
@@ -209,7 +209,7 @@ data class MapColors(
                 "--panel-color": "$panelText",
                 "--panel-bgcolor": "$panelBackground",
                 "--panel-border-color": "$panelBorder",
-                "--map-padding": "36px 56px"
+                "--map-padding": "16px 24px"
               }
             }
         """.trimIndent()
