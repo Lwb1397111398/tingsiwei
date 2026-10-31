@@ -123,13 +123,21 @@ object NoteProcessor {
         dao.update(n.copy(status = NoteStatus.TRANSCRIBING, errorMsg = null, updatedAt = System.currentTimeMillis()))
         setStage(noteId, "正在解码音频…")
         try {
-            val text = Transcriber.transcribeOffline(App.get(), audio) { _, msg ->
+            val result = Transcriber.transcribeOffline(App.get(), audio) { _, msg ->
                 setStage(noteId, msg)
             }
-            if (text.isBlank()) {
+            if (result.text.isBlank()) {
                 throw IllegalStateException("没有识别到内容，请检查录音质量；也可到设置里改用「手机自带识别」重新录一次")
             }
-            dao.update(n.copy(content = text, status = NoteStatus.DRAFT, updatedAt = System.currentTimeMillis()))
+            // timings 一起落库：详情页播录音时按它高亮当前句并自动滚动（见 Timeline）
+            dao.update(
+                n.copy(
+                    content = result.text,
+                    timings = result.timingsJson,
+                    status = NoteStatus.DRAFT,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
             runGenerate(noteId)
         } catch (e: CancellationException) {
             throw e

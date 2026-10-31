@@ -33,6 +33,11 @@ data class NoteEntity(
     val durationMs: Long = 0,
     /** 转写或手动输入的原文 */
     val content: String? = null,
+    /**
+     * 播放跟随时间轴 JSON（Timeline 编码：[{"s":起,"e":止,"t":"句子"}, ...]）。
+     * 录音/导入笔记转写时生成；文字录入与升级前的旧笔记为 null——详情页无高亮跟随。
+     */
+    val timings: String? = null,
     /** mind-elixir 完整数据 JSON */
     val mapJson: String? = null,
     /** 记忆用的思路段落 */

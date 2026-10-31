@@ -7,6 +7,7 @@ import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.transcribe.SystemSpeechRecognizer
+import com.tingsiwei.app.transcribe.Timeline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,9 +43,21 @@ object RecordSession {
     private var sysRecognizer: SystemSpeechRecognizer? = null
     private var ticker: Job? = null
 
+    /**
+     * 系统识别模式：每段最终结果到达时的录音时长（毫秒）。
+     * 与 finalText 的行一一对应（一段结果可能多行，每行记同一时刻），存进笔记当播放时间轴。
+     * 回调在主线程、读在 IO 协程，锁保护。
+     */
+    private val segArrivals = mutableListOf<Long>()
+    private val segLock = Any()
+
     private val recognizerCallback = object : SystemSpeechRecognizer.Callback {
         override fun onSegment(text: String) {
             finalText.value = (finalText.value + text + "\n").trim()
+            val at = durationMs.value
+            synchronized(segLock) {
+                repeat(text.lines().count { it.isNotBlank() }) { segArrivals.add(at) }
+            }
             partialText.value = ""
         }
 
@@ -72,6 +85,7 @@ object RecordSession {
                 durationMs.value = 0
                 finalText.value = ""
                 partialText.value = ""
+                synchronized(segLock) { segArrivals.clear() }
                 // 前台服务保活：锁屏/切后台也继续录
                 RecordService.start(App.get())
                 if (transcribeMode.value == TranscribeMode.SYSTEM) startRecognition()
@@ -121,9 +135,15 @@ object RecordSession {
         // 先取快照再异步入库，避免新一轮录音把状态改掉
         val systemText = finalText.value.trim()
         val mode = transcribeMode.value
+        val arrivals = synchronized(segLock) { segArrivals.toList() }
         scope.launch(Dispatchers.IO) {
             try {
                 val content = if (mode == TranscribeMode.SYSTEM && systemText.isNotBlank()) systemText else null
+                // 系统识别当场就有全文：时间轴一并入库，播放时才能高亮跟随；
+                // 空全文走离线转写，时间轴由 Transcriber 生成
+                val timingsJson = if (content != null) {
+                    Timeline.encode(Timeline.buildFromLineArrivals(systemText.lines(), arrivals, duration))
+                } else null
                 val id = App.get().database.noteDao().insert(
                     NoteEntity(
                         title = "录音 ${SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date())}",
@@ -134,6 +154,7 @@ object RecordSession {
                         audioPath = file.absolutePath,
                         durationMs = duration,
                         content = content,
+                        timings = timingsJson,
                     )
                 )
                 // 离开录音页后处理也要继续：交给 App 级协程，进详情页只是看进度

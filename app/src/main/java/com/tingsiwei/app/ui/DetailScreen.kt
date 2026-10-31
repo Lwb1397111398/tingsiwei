@@ -16,6 +16,9 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +33,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -75,6 +80,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -97,6 +103,7 @@ import com.tingsiwei.app.export.Exporter
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
 import com.tingsiwei.app.pipeline.NoteProcessor
+import com.tingsiwei.app.transcribe.Timeline
 import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.ui.components.EmptyState
@@ -114,6 +121,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -413,6 +421,8 @@ private fun CanvasToolButton(
 @Composable
 private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Modifier) {
     if (n == null) return
+    // 时间轴随笔记解析一次（几百句 JSON 毫秒级），不随播放进度反复解析
+    val segments = remember(n.id, n.timings) { Timeline.decode(n.timings) }
     Column(modifier.fillMaxSize()) {
         if (n.audioPath != null) {
             AudioPlayerCard(vm)
@@ -428,6 +438,9 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
                     else "这条笔记没有可直接阅读的原文。",
                 )
             }
+        } else if (segments.isNotEmpty()) {
+            // 有时间轴：逐句渲染，播放时高亮当前句并自动滚动对准
+            SyncedTranscript(vm, segments, content)
         } else {
             val ctx = LocalContext.current
             // 按段落拆成独立列表项：整篇塞进单个 item 时几万字要一次性测量排版，Lazy 形同虚设
@@ -467,6 +480,109 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
                 }
             }
         }
+    }
+}
+
+/**
+ * 有时间轴的原文：逐句渲染，播放到哪句就高亮哪句，并把页面滚动到让这句居中。
+ *
+ * 跟随规则（按老板要求是「强制对准」）：
+ * - 只认「当前句变化」这一事件滚动，不逐帧跟（进度流 300ms 一跳，句子几秒才换）；
+ * - 用户手指拖着列表时不抢（拖着走），一松手，下一句变化时立刻拉回对准；
+ * - 点任意一句 = 从那句开始播（在播就跳过去，没播就起播），方便单句反复听。
+ */
+@Composable
+private fun SyncedTranscript(
+    vm: DetailViewModel,
+    segments: List<Timeline.Segment>,
+    content: String,
+) {
+    val ctx = LocalContext.current
+    val listState = rememberLazyListState()
+    val posMs by vm.playPosMs.collectAsState()
+    // 手指拖动期间暂停自动跟滚；松手后由下一次句变化自然接管
+    val dragging = remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> dragging.value = true
+                is DragInteraction.Stop, is DragInteraction.Cancel -> dragging.value = false
+            }
+        }
+    }
+    LaunchedEffect(listState, segments) {
+        var last = -1
+        vm.playPosMs.collect { pos ->
+            if (pos <= 0L) return@collect
+            val idx = Timeline.activeIndex(segments, pos)
+            // 拖动期间只记不滚：last 不更新，松手后下一跳必然触发一次对准
+            if (idx != last && !dragging.value) {
+                last = idx
+                centerItem(listState, idx)
+            }
+        }
+    }
+    SelectionContainer {
+        LazyColumn(
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            contentPadding = PaddingValues(
+                start = Spacing.screen,
+                end = Spacing.screen,
+                top = Spacing.md,
+                bottom = Spacing.xl,
+            ),
+        ) {
+            items(segments.size) { i ->
+                val seg = segments[i]
+                val active = i == Timeline.activeIndex(segments, posMs)
+                val bg by animateColorAsState(
+                    targetValue = if (active) MaterialTheme.colorScheme.primaryContainer
+                    else Color.Transparent,
+                    animationSpec = tween(Motion.Snappy),
+                    label = "segBg$i",
+                )
+                Text(
+                    seg.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(bg, MaterialTheme.shapes.medium)
+                        .clickable { vm.onSentenceTap(seg.startMs) }
+                        // 高亮态与普通态 padding 一致，切换时文字不跳位
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+            item {
+                OutlinedButton(
+                    onClick = {
+                        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("原文", content))
+                    },
+                    shape = CircleShape,
+                ) {
+                    Icon(Icons.Filled.ContentCopy, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("复制全文")
+                }
+            }
+        }
+    }
+}
+
+/** 把第 index 句滚到视口中部：不在屏内先瞬移到跟前，等一帧布局落定后再按实测高度居中 */
+private suspend fun centerItem(listState: LazyListState, index: Int) {
+    if (listState.layoutInfo.visibleItemsInfo.none { it.index == index }) {
+        listState.scrollToItem(index)
+    }
+    withFrameNanos { }
+    val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val layout = listState.layoutInfo
+    val viewportCenter = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+    val delta = (info.offset + info.size / 2 - viewportCenter).toFloat()
+    if (abs(delta) > 48f) {
+        listState.animateScrollBy(delta, Motion.standard(280))
     }
 }
 
@@ -937,40 +1053,60 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
 
     fun togglePlay() {
         viewModelScope.launch {
-            val n = db.noteDao().byId(noteId) ?: return@launch
-            val path = n.audioPath ?: return@launch
-            val p = player
-            if (p == null) {
-                try {
-                    val mp = withContext(Dispatchers.IO) {
-                        val m = MediaPlayer()
-                        try {
-                            m.setDataSource(path)
-                            m.prepare()
-                            m
-                        } catch (e: Exception) {
-                            m.release() // 半初始化的播放器也要放掉，否则 native 资源泄漏
-                            throw e
-                        }
-                    }
-                    mp.setOnCompletionListener {
-                        playing.value = false
-                        playPosMs.value = playDurationMs.value
-                    }
-                    playDurationMs.value = mp.duration.toLong()
-                    player = mp
-                    mp.start()
-                    playing.value = true
-                    startTicker()
-                } catch (e: Exception) {
-                    // 此前静默吞掉：录音文件损坏/被清理时点播放毫无反应，用户不知道为什么
-                    playing.value = false
-                    uiMessage.value = "音频播放失败：${e.message ?: "文件可能已损坏"}"
-                }
-            } else if (p.isPlaying) {
+            val p = ensurePlayer() ?: return@launch
+            if (p.isPlaying) {
                 p.pause()
                 playing.value = false
             } else {
+                p.start()
+                playing.value = true
+                startTicker()
+            }
+        }
+    }
+
+    /** 播放器懒创建：首次点播放/点句子才 prepare；失败报 Snackbar 返回 null */
+    private suspend fun ensurePlayer(): MediaPlayer? {
+        player?.let { return it }
+        val path = db.noteDao().byId(noteId)?.audioPath ?: return null
+        return try {
+            val mp = withContext(Dispatchers.IO) {
+                val m = MediaPlayer()
+                try {
+                    m.setDataSource(path)
+                    m.prepare()
+                    m
+                } catch (e: Exception) {
+                    m.release() // 半初始化的播放器也要放掉，否则 native 资源泄漏
+                    throw e
+                }
+            }
+            mp.setOnCompletionListener {
+                playing.value = false
+                playPosMs.value = playDurationMs.value
+            }
+            playDurationMs.value = mp.duration.toLong()
+            player = mp
+            mp
+        } catch (e: Exception) {
+            // 此前静默吞掉：录音文件损坏/被清理时点播放毫无反应，用户不知道为什么
+            playing.value = false
+            uiMessage.value = "音频播放失败：${e.message ?: "文件可能已损坏"}"
+            null
+        }
+    }
+
+    /**
+     * 点某一句：从那句的起点播——在播就跳过去，没播就起播。
+     * 跟读场景「这句没听清，从这里再来一遍」。
+     */
+    fun onSentenceTap(startMs: Long) {
+        viewModelScope.launch {
+            val p = ensurePlayer() ?: return@launch
+            val target = startMs.coerceIn(0L, playDurationMs.value).toInt()
+            p.seekTo(target)
+            playPosMs.value = target.toLong()
+            if (!p.isPlaying) {
                 p.start()
                 playing.value = true
                 startTicker()

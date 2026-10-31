@@ -10,6 +10,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -73,16 +75,24 @@ interface VersionDao {
 // exportSchema=true：每次升版本在 app/schemas/ 生成 JSON 快照入库，表结构改动可 diff。
 // 铁律：升 version 必须同步写 Migration 并加进 addMigrations——没有破坏性回退，
 // 忘写迁移会在启动时直接抛异常（宁可崩在明处，不可静默清空用户全部笔记）。
-@Database(entities = [NoteEntity::class, VersionEntity::class], version = 1, exportSchema = true)
+@Database(entities = [NoteEntity::class, VersionEntity::class], version = 2, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun versionDao(): VersionDao
 
     companion object {
+        /** v1→v2（2026-10-31）：notes 加 timings 列，播放录音时高亮跟随当前句用；旧行为 null 即无时间轴 */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN timings TEXT")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "tingsiwei.db")
                 // 2026-10-25 移除 fallbackToDestructiveMigration：升版本不再静默清库。
-                // version 仍是 1、尚无迁移；首次升版本时必须配 MIGRATION_1_2 挂到这里。
+                // 每次升 version 必须新增 Migration 并挂到这里（v1→v2 已挂）。
+                .addMigrations(MIGRATION_1_2)
                 .build()
     }
 }
