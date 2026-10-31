@@ -53,9 +53,9 @@
 - `speak(text, rate, engine, cloud = null, fallback = true)`（`TtsPlayer.kt:69`）← `DetailScreen.toggleTtsText`（cloud 引擎时传 `CloudTtsConfig.fromSettings(s)` 组装的配置，正文 fallback 默认 true）、`SettingsScreen.togglePreview`（试听，`cloudConfig()` 按界面值按档位组装，cloud 引擎时传 `fallback=false`）。
 - `updateRate(rate)`（`TtsPlayer.kt:97`）← 详情页与设置页朗读中拖语速条；对在线引擎无额外动作——`liveRate` 每句请求前重读，下一句自然生效。
 - `stop()`（`TtsPlayer.kt:109`）← 两个调用点；`track?.pause()+flush()` 立刻掐声。
-- `shutdown()`（`TtsPlayer.kt:126`）← 仅详情页 `onCleared`。
-- `val isSpeaking`（`:59`）、`var onStateChange`（仍无赋值点，宿主都用轮询）。
-- `LocalTtsEngine.obtain/release`、`internal fun splitForSpeech`（`TtsPlayer.kt:475`，`TtsSplitTest` 直接测；生产三处调用都传 120）。
+- `shutdown()`（`TtsPlayer.kt:126`）← 详情页与设置页的 `onCleared`（设置页 2026-10-31 起接入，修试听引擎泄漏）。
+- `val isSpeaking`（`:59`）。`var onStateChange` **已于 2026-10-31 移除**——全项目从未有赋值点，14 处内部 invoke 全是空转，宿主都用 300ms 轮询 `isSpeaking`。
+- `LocalTtsEngine.obtain/release`：`release` 自 2026-10-31 起有真实调用方——设置页 `deleteTtsModel()` 删完文件后放掉常驻引擎（此前 release 全项目零调用，「删了模型内存里还压着 114MB 且还能读」）；`internal fun splitForSpeech`（`TtsPlayer.kt:475`，`TtsSplitTest` 直接测；生产三处调用都传 120）。
 - `CloudTtsClient` 接口（`streamPcm(text, speed, onPcm)`，`CloudTts.kt`）：`CloudTts` 与 `ElevenTts` 都实现它，`TtsPlayer.speakCloud` 只依赖接口按 `cfg.provider` 分发（`TtsCloudProvider.ELEVEN` → ElevenTts，其余 → CloudTts）。
 - `ElevenTts(cfg)` / `streamPcm` 仅 `TtsPlayer.speakCloud` 使用；`fetchVoices()` / `parseVoices` / `MODELS`（3 个官方模型中文标签）被设置页 UI 用（「获取音色」chips、模型 chips）。
 - `CloudTts(cfg)` / `streamPcm` 仅 `TtsPlayer.speakCloud` 使用；`fetchModels()` / `filterTtsModels` / `voicePresetsFor` / `buildVoice` / `voiceLabel` 被设置页 UI 用（检索模型、音色预置 chips、模型/音色拼装）。
@@ -108,6 +108,8 @@
 17. **官方档与自定义档是两套协议、两套配置，互不覆盖**：ElevenLabs 音色 ID 在 URL 路径、鉴权头 `xi-api-key`、请求体 `{"text","model_id"}`，与 OpenAI 兼容格式（音色在 body、Bearer 鉴权）完全不同，所以不能共用一个客户端；`CloudTtsTransport` 接口为此加了 `authHeaderName` 参数（`Authorization` 缺省按 Bearer 拼，其他头名用 key 原值）。两档各存各的键（官方 `tts_eleven_key/voice/model`，自定义 `tts_cloud_url/key/voice/model`），切换档位不丢配置。官方免费档每月 10000 字符（约读两三篇 3000 字笔记），额度用尽时官方回 401（带 quota_exceeded），App 报「请检查 API Key（免费额度用尽也会这样）」——不是 Key 填错。官方音色列表（GET /voices 免费可用）拉到 21 个 premade 音色，都能读中文。
 
 ## 最后更新
+
+2026-10-31 · 健康修复批（逻辑面三处小改）：①**移除死回调 `onStateChange`**——全项目从无赋值点、内部 14 处 invoke 全空转，删除字段与全部 invoke（`playing.set(false)` 等状态转换保留）；②**设置页试听引擎泄漏修复**——`SettingsViewModel` 新增 `onCleared()` 调 `previewTts.shutdown()`（此前每进出设置页泄漏一份系统 TTS 实例与内部协程），`shutdown()` 的调用方从「仅详情页」变为「详情页 + 设置页」；③**`LocalTtsEngine.release()` 有了真实调用方**——设置页删 TTS 模型后放掉常驻引擎（此前 release 全项目零调用，删文件不腾内存）。`OkHttpCloudTtsTransport` 的客户端改从 `util.Http.base` newBuilder 派生（连接池与 LLM/下载共用，超时不变：connect 15s / read 30s）。文件 501→492 行。
 
 2026-10-24 · 在线朗读分两档：新增「官方 ElevenLabs」（默认）——`ElevenTts.kt`（185 行）专属客户端（官方协议与 OpenAI 兼容不同：音色 ID 在 URL、`xi-api-key` 鉴权、pcm_24000 流式无回退、语速 0.7~1.2 夹取）；`CloudTtsClient` 统一接口 + `CloudTtsConfig.provider` 字段 + `fromSettings` 工厂；`CloudTtsTransport` 加 `authHeaderName` 参数；`CloudTtsAudio.drainPcmStream` 抽共享读流；设置页朗读卡加官方/自定义切换与「获取音色」（GET /voices 21 个官方音色点选）；`SettingsRepository` 加 `tts_cloud_provider` + `tts_eleven_key/voice/model` 四键；`DetailScreen` 改用 `fromSettings`。修实测 bug：speed Float 长尾被官方 400 拒（坑 16）。**模拟器全链路实测**：获取音色 21 个成功、试听合成出声成功（logcat `ElevenTts: 流式 PCM 完成：222912 字节`）。207 例单测全过（ElevenTtsTest 10 例新增）。真机听感待老板验收（UNMEASURED）。
 

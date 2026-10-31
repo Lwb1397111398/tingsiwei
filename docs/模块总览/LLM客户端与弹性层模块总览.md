@@ -33,9 +33,9 @@
 
 | 相对路径 | 行数 | 一句话职责 |
 | --- | --- | --- |
-| `app/src/main/java/com/tingsiwei/app/llm/LlmClient.kt` | 120 | 面向业务的门面 + 生产 `OkHttpTransport`：读设置 → 规范化地址 → 组装 `LlmSession`；OkHttp 三档超时与 IO 异常归类也在此 |
+| `app/src/main/java/com/tingsiwei/app/llm/LlmClient.kt` | 145 | 面向业务的门面 + 生产 `OkHttpTransport`：读设置 → 规范化地址 → 组装 `LlmSession`；OkHttp 三档超时与 IO 异常归类也在此 |
 | `app/src/main/java/com/tingsiwei/app/llm/LlmSession.kt` | 253 | 纯 Kotlin 会话：预算 → 节流 → 发送 → 分类 → 退避重试 → SSE/JSON 双解析 → 截断/硬帽降级，零 Android 依赖 |
-| `app/src/main/java/com/tingsiwei/app/llm/LlmPolicy.kt` | 244 | 弹性层全部零件：`Transport`/`Sleeper`/`ClockSource` 接缝、`LlmError` 分级、`RateGate`、`LlmEndpoint`、`LlmPolicy` 常量/退避/Retry-After、`Tokens` 预算 |
+| `app/src/main/java/com/tingsiwei/app/llm/LlmPolicy.kt` | 247 | 弹性层全部零件：`Transport`/`Sleeper`/`ClockSource` 接缝、`LlmError` 分级、`RateGate`、`LlmEndpoint`、`LlmPolicy` 常量/退避/Retry-After、`Tokens` 预算 |
 | `app/src/test/java/com/tingsiwei/app/LlmPolicyTest.kt` | 612 | 本模块 34 个 JVM 单测：429 退避、Retry-After、截断加码、400 硬帽降档、节流闸、预算降级、地址规范化、模型列表 GET、无 temperature |
 | `app/src/test/java/com/tingsiwei/app/LlmSessionStreamTest.kt` | 115 | 流式解析 8 个单测：SSE 拼块、stream=true 断言、思维链跳过、length 截断带回部分内容、流中断按网络错误、整段 JSON 兼容、keep-alive 注释行 |
 
@@ -49,7 +49,7 @@
 | `LlmClient.listModels(baseUrl, apiKey)` | `LlmClient.kt:27-29` | 设置页拉模型下拉（`SettingsScreen.kt:462`） |
 | `LlmSession` | `LlmSession.kt:20` | 仅 `LlmClient.session()`（`LlmClient.kt:58-74`）与两个测试类直接构造 |
 | `LlmError`（含 `retryable`/`httpCode`/`retryAfterMs`/`Truncated.partialContent`） | `LlmPolicy.kt:33-68` | `LongTextPipeline.callOrSalvage` 靠 `retryable` 分诊并靠 `partialContent` 抢救（`LongTextPipeline.kt:382-400`）；`Generator.friendly` 直接取 `message`（`Generator.kt:329-334`） |
-| `Transport.post` / `Transport.get` | `LlmPolicy.kt:11` / `:13` | post 走对话，get 走模型列表（OpenAI 兼容渠道对 POST /models 通常回 404）；单测注入假实现 |
+| `Transport.post` / `Transport.get` | `LlmPolicy.kt:11` / `:13` | **均为 `suspend`（2026-10-31 起）**：生产实现协程被取消（用户点停止/删笔记）时立刻 `call.cancel()` 掐断在途请求，不再耗完读超时；post 走对话，get 走模型列表（OpenAI 兼容渠道对 POST /models 通常回 404）；单测注入假实现（已同步加 suspend） |
 | `RateGate` / `GlobalGate.shared` | `LlmPolicy.kt:74-92` / `:95-97` | `LlmClient`/`LlmSession` 的默认 gate；单测用 `RateGate(time, time)` 替换（`LlmPolicyTest.kt:78`） |
 | `LlmEndpoint.normalize` | `LlmPolicy.kt:103-110` | `LlmClient.endpoint`（`LlmClient.kt:55-56`）；纯函数被 JVM 单测直接覆盖（`LlmPolicyTest.kt:520-547`） |
 | `LlmPolicy.*`（`retryAfterMs`/`backoffMs`/`windowFor`/`intervalFor`） | `LlmPolicy.kt:142-163` | `LlmSession.call` 的退避（`LlmSession.kt:158`）、`window`/`intervalMs`（`LlmSession.kt:37-38`）、`LongTextPipeline.effectiveWindow`（`LongTextPipeline.kt:68`）、`Generator.stagedOrDirect` 的窗口估算（`Generator.kt:238`） |
@@ -61,7 +61,7 @@
 
 - **`data/SettingsRepository.kt`**：唯一的配置来源，取 `llmContextWindow`/`llmMinIntervalMs`/`llmConservative`（`LlmClient.kt:59-72`）。边界常量由它定义：`MinContextWindow = 2048`、`MaxContextWindow = 1_000_000`、`MaxMinIntervalMs = 60_000L`（`SettingsRepository.kt:158-161`）。窗口默认值走 `LlmPolicy.DEFAULT_CONTEXT_WINDOW = 131_072`；老用户存的是旧默认 16384 的，首次读取被一次性迁到新默认（`windowMigrated` 标记，`SettingsRepository.kt:94-97`）。
 - **`llm/Prompts.kt`**：`LlmClient.chat` 的 `degradeRule` 参数默认取 `Prompts.trimRule()`（`LlmClient.kt:42`）；改写链路换成 `Prompts.diffTrimRule()`（`Generator.kt:123`）。本模块不认识其它提示词。
-- **OkHttp**：`OkHttpClient` 三档超时（连接 20s / 读 300s / 写 60s，`LlmClient.kt:80-84`），读超时给到 5 分钟；流式下读超时是「两次字节到达之间的间隔」而不是总时长，因此长回答不会被它掐。
+- **OkHttp**：客户端从 `util.Http.base`（进程级共享底座，2026-10-31 起）`newBuilder()` 派生，只覆盖读 300s / 写 60s（连接 20s 继承底座）——连接池与线程池和模型下载、在线朗读共用一份；读超时给到 5 分钟，流式下读超时是「两次字节到达之间的间隔」而不是总时长，因此长回答不会被它掐。
 - **kotlinx-serialization-json**：只用 `Json` 的 DOM（`JsonObject`/`JsonArray`/`JsonPrimitive`）手工取字段，不定义 `@Serializable` 数据类（`LlmSession.kt:4-13`、`35`）。
 - **kotlinx-coroutines**：`Mutex`/`withLock`（`LlmPolicy.kt:3-4`）、`delay`（`LlmPolicy.kt:23-27`）、`withContext(Dispatchers.IO)`（`LlmClient.kt:4-5`）。
 - **无 Android 依赖**：`LlmSession.kt` 与 `LlmPolicy.kt` 全文不 import 任何 `android.*`，这是整层能跑纯 JVM 单测的前提（`LlmSession.kt:16-19` 注释；`LlmPolicyTest`/`LlmSessionStreamTest` 零 Robolectric）。
@@ -93,7 +93,7 @@
 
 **注释与实现的矛盾**
 
-1. `Transport.post` 的 KDoc 说「只允许抛 `LlmError`，其余异常由 `LlmSession` 兜底归类为**不可重试**」（`LlmPolicy.kt:10-11`），但实现把漏出的意外异常包成 `LlmError.Network()`，而 Network 是**可重试**的（`LlmSession.kt:150-153`，该处注释自己写的是「按可重试的网络错误处理」）。两处注释互相矛盾，以实现为准：意外异常会吃掉一次重试额度。索引 README「已知缺陷」第 4 条记录的就是它。
+1. ~~`Transport.post` 的 KDoc 与实现矛盾（注释说不可重试、实现按可重试网络错误）~~ **已修（2026-10-31）**：KDoc 改为与实现一致的「按**可重试的网络错误**归类」，README「已知缺陷」第 4 条就此销账。
 2. **流被掐断也算网络错误**：SSE 收完但既没有 `finish_reason` 也没有 `[DONE]`，按可重试 `Network` 走退避（`LlmSession.kt:210-211`）——渠道半路断流会静默重打一次，语义上合理但排障时要知道「这次失败不是真的 5xx」。
 
 **取消与文案**
@@ -132,6 +132,8 @@
 - 流式（`LlmSessionStreamTest`）：`a` 逐块拼回（`:48`）、`a2` 请求体必须 stream true（`:58`）、`b` 思维链跳过（`:65`）、`c` length 截断带回部分内容（`:72`）、`d` 流中断按网络错误（`:83`）、`e` 只有 DONE 没内容按空内容（`:94`）、`f` 渠道忽略 stream 回整段 JSON 也能解（`:105`）、`g` keep-alive 注释行不影响（`:111`）。
 
 ## 最后更新
+
+2026-10-31 · 两项修复：①**协程取消掐断在途请求**——`Transport.post/get` 从阻塞同步改为 `suspend`，生产 `OkHttpTransport` 重写为 `enqueue` + `suspendCancellableCoroutine`（`invokeOnCancellation { call.cancel() }`）：此前点「取消」/删笔记后，在途 HTTP 请求对协程取消无感，最坏（5 次重试 × 60s 退避 × 300s 读超时）还会在后台跑 20+ 分钟烧额度；现在取消即刻断连，退避 sleep（delay）本身可取消，整条链路秒停。7 处测试假实现（LlmPolicyTest 6 + LlmSessionStreamTest 1）同步加 suspend，LlmPolicyTest 34 例 + LlmSessionStreamTest 8 例 + LongTextPipelineTest 22 例全过。②`OkHttpClient` 改从 `util.Http.base` 派生（连接池/线程池与模型下载、在线朗读共用）。③KDoc 矛盾修复（见坑 1）。行数：LlmClient 120→145、LlmPolicy 244→247。
 
 2026-10-04 · 按 v1.5.0 当前代码全量刷新（旧版为 2026-09-20 首次成文）。本次纠正的过期说法：①「非流式 stream=false」→ 现默认 `stream=true`，新增 SSE 解析与 `LlmSessionStreamTest` 8 例；②「输出上限 2048 / 窗口默认 16384」→ 16384 / 131072（老用户一次性迁移，`LEGACY_DEFAULT_CONTEXT_WINDOW`）；③新增 400 硬帽降档（8192 档）与「截断抬预算 2 倍重问、带回 partialContent 抢救」整条降级链；④「温度 0.4 默认值、chat 带 temperature」→ 请求体已不含 temperature（用例 m6）；⑤`Transport` 新增 `get`（模型列表改 GET）；⑥`listModels` 的 404 现在抛带人话的 `LlmException` 而非静默空列表；⑦全部行号按当前源码重新核对。
 

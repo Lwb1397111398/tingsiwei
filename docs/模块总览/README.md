@@ -31,7 +31,7 @@
 | 转写模式选择 | `data/SettingsRepository.kt`（`TranscribeMode` 定义在此，不在 `transcribe/`）+ 调用侧 | OFFLINE / SYSTEM 双模式，**默认 OFFLINE**（`SettingsRepository.kt:88`/`:120` 两处读盘默认、`RecordSession.kt:35` 内存初值，设置页选中态 `SettingsScreen.kt:180`），设置页可切 | [转写模式选择模块总览.md](转写模式选择模块总览.md) |
 | TTS 朗读 | `tts/TtsPlayer.kt`、`tts/ElevenTts.kt`、`tts/CloudTts.kt`、`tts/CloudTtsAudio.kt`、`tts/SherpaTts.kt`、`tts/TtsChunkCallback.java` | 三引擎朗读「思路」：系统 TextToSpeech + sherpa-onnx kokoro 离线模型（未下载自动回落系统）+ 云端大模型在线朗读（两档服务：**官方 ElevenLabs**（默认，`ElevenTts`，填 Key 即用，音色可在线拉取点选，pcm_24000 流式）/ 自定义 OpenAI 兼容（`CloudTts`，任意渠道，流式 PCM 拒收自动回退 WAV），失败自动回落离线/系统），长文按句切块（每块 ≤120 字），朗读中可随时调速（滑杆 0.5~2.0x，在线官方档钳制在 0.7~1.2） | [TTS朗读模块总览.md](TTS朗读模块总览.md) |
 | 导出 | `export/Exporter.kt` | Markdown（导图+思路+原文）、FileProvider 分享 | [导出模块总览.md](导出模块总览.md) |
-| 通用工具 | `util/Formatters.kt` | 时长/体积/时间等格式化，被各页面共用 | [通用工具模块总览.md](通用工具模块总览.md) |
+| 通用工具 | `util/Formatters.kt`、`util/Http.kt` | 时长/体积/时间等格式化（被各页面共用）+ 进程级 OkHttp 共享底座（LLM/模型下载/在线朗读三处客户端 newBuilder 派生，连接池线程池共用一份） | [通用工具模块总览.md](通用工具模块总览.md) |
 
 ## 关键设计决策
 
@@ -57,10 +57,10 @@
 ## 已知缺陷与待办（补写模块总览时核出，均已在对应总览的「已知坑与约束」里落档）
 
 1. **语速设置基本不生效——已在 v1.5.0 修复**：旧版 `TtsPlayer.speak(text, rate)` 只在引擎**未就绪**分支把 `rate` 存进字段（旧代码 `TtsPlayer.kt:29-36`），已就绪时直接丢弃（旧代码 `:38`/`DetailScreen.kt:658`，行号对应 v1.4 代码，现已不存在）；现 `speak()` 开头即 `liveRate = rate`（`TtsPlayer.kt:66`），系统引擎 `setSpeechRate`（`:231`）、离线引擎每句合成前读 `liveRate`（`:306`），朗读中 `updateRate` 即时调速——详见 [TTS朗读模块总览.md](TTS朗读模块总览.md)「已知坑」第 1 条。
-2. **导图 PNG 导出链路休眠**：`MindMapPanel.exportPng()`（`:62`）、`Exporter.savePng()`（`:66`）、`Exporter.shareText()`（`:84`）、`onPngCb`（`:25`）全项目零调用点，JS 侧 `onPngReady` 未接回原生。
-3. **模型就绪阈值过松**：判据是文件长度 `> 200_000_000`（`SherpaTranscriber.kt:54`、`SettingsScreen.kt:616`），而真实体积 `237_115_547`（`ModelManager.kt:25`）→ 中断留下的 200~237MB 截断文件会被判"已就绪"，续跑门槛（`ModelManager.kt:459-462`，目标文件 ≥ minBytes 直接跳过下载）也会当它下完了。
-4. **注释与实现矛盾**：`Transport` 的 KDoc 说意外异常归"不可重试"，实现把它包成可重试的 `Network`（`LlmPolicy.kt:11` vs `LlmSession.kt:112-113`）。
-5. **撤销/重做是否落库存疑**：回传点是 `operation` 事件（`index.html:137` → `scheduleSave()`），而 `appUndo/appRedo`（`index.html:174-175`）只调 `mind.undo()/redo()` 加刷按钮，不显式 `scheduleSave()`。真机若出现"撤销后退出重进又变回来"，就在 `appUndo/appRedo` 后补一次 `scheduleSave()`。
+2. ~~**导图 PNG 导出链路休眠**~~ **已修（2026-10-31）**：整条链路接通——详情页画布浮层新增「导出图片」按钮 → `MapController.exportPng()` → JS `appExportPng` 渲染 base64 → `onPngReady` 回传 → `DetailViewModel.exportPng()` → `Exporter.savePng` + 系统分享；`MindMapPanel` 补 `onPngReady` 参数接入 `onPngCb`。`shareText()` 死代码已删。
+3. ~~**模型就绪阈值过松**~~ **已修（2026-10-31）**：`isModelReady` 改 `>= ModelManager.MODEL_BYTES`，设置页 `downloadFile` 的 `minBytes` 同步改传 `MODEL_BYTES`——就绪判定/续传门槛/完整性校验三处同源，半截文件不再假就绪。
+4. ~~**注释与实现矛盾**~~ **已修（2026-10-31）**：`Transport` KDoc 改为与实现一致的「意外异常按可重试网络错误归类」。
+5. ~~**撤销/重做是否落库存疑**~~ **已修（2026-10-31）**：`appUndo`/`appRedo` 补 `scheduleSave()`（`index.html:260-263`），撤销后退出重进不会再变回原样。
 6. 小项：`Recorder.kt:14` 注释标"暂停/继续（Android 7.0+）"，`minSdk` 已是 26，该门槛恒满足，注释属冗余；`res/xml/file_paths.xml:4` 的 `exports` 路径疑为历史残留（无对应清理逻辑）。
 7. 以下三条**未实测、属静态推断**：SYSTEM 识别与 MediaRecorder 并发占麦能否真出字；`SystemSpeechRecognizer` 在 `Dispatchers.Default` 上创建（start 与 resume 路径线程不一致）是否丢回调；SettingsScreen 下载失败后 `.part` 残留是否会让下载按钮永久禁用（`SettingsScreen.kt:334-337,195,423`）。
 
@@ -81,6 +81,8 @@
 - 模拟器镜像包名是 `system-images;android-37.0;google_apis_playstore;x86_64`（SDK 目录里的 `google_apis_playstore_ps16k` 目录是无效残留）
 
 ## 最后更新
+
+2026-10-31 · 全库健康优化批（16 项，老板点单「全部优化」）：**P0 bug 五修**——设置页试听引擎泄漏（`onCleared` 关停）、删模型主线程卡顿 + 删后引擎不放（`LocalTtsEngine/LocalAsrEngine.release`）、LLM 取消掐不断在途请求（`Transport` 改 suspend + enqueue 可取消）、恢复版本可闪退（补 catch）、版本快照无限膨胀（`pruneTo` 封顶 20 份/篇）；**P2 旧账三清**——模型就绪阈值 200MB→`MODEL_BYTES` 同源、画布撤销补 `scheduleSave()`、PNG 导出死链路接通（新功能：详情页「导出图片」按钮）；**P1 性能五项**——识别引擎单例化（`LocalAsrEngine`，不再每篇重载 230MB）、设置写入防抖（600ms）、转写通知节流（500ms）、首页轻量投影 + SQL 搜索（`observeList`/`searchList` + `NoteListItem`）、原文页分块渲染；**P3 代码健康**——`SettingsRepository` 双份 25 字段映射合一、死代码清理（`onStateChange`/`MapController` 缩放五件/`shareText`/`VersionDao.delete`/`NoteDao.search`）、OkHttp 三处客户端共享 `util.Http.base` 底座。十三份模块总览同批更新。**验证**：`testDebugUnitTest` 207 例全绿（0 失败 0 跳过）+ `assembleDebug` 成功。**UNMEASURED**：PNG 导出真机出图、识别单例的模拟器转写冒烟、Room 迁移单测（评估结论：version=1 无迁移可测，MigrationTestHelper 需 instrumentation 或引入 Robolectric——等首次升版本写 `MIGRATION_1_2` 时一并建 androidTest，现在建是空测；防呆已由「移除破坏性迁移 + schema 快照入库」承担）。
 
 2026-10-25 · 界面美化批（五个页面 + 主题层 + 导图画布）：新增 `ui/theme/Tokens.kt`（色板/排版/圆角/间距）、`ui/components/Common.kt`（共享零件）、`ui/components/SettingsParts.kt`（设置页控件）三个文件；重写 `Theme.kt`（去动态取色，改品牌色 + `MapTheme` 画布配色）；首页/录音页/文字录入页/详情页/设置页五份总览与导图画布总览同批更新，入口与导航行的入口文件补两个新文件。逻辑层（ViewModel、数据层、流水线、TTS、自更新）**零改动**；`testDebugUnitTest` 207 例仍全绿、`assembleDebug` 通过；模拟器实测首页/详情三标签/录音页/文字录入页/设置页明暗两套 + 导图自适应缩放全部正常。
 
