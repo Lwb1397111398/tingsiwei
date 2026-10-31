@@ -303,8 +303,10 @@ fun HomeScreen(
                             key = { _, n -> n.id },
                             contentType = { _, _ -> "note" },
                         ) { i, note ->
-                            val playEnter = note.id !in shownIds
-                            LaunchedEffect(note.id) { shownIds.add(note.id) }
+                            // Set.add 返回「是否真新增」：在 remember(note.id) 里只判定一次，
+                            // 之后任何重组都不会翻转结果——若每次重组都重算「播过没有」，
+                            // 标记生效后 enabled 翻转会取消在飞的入场动画（白屏 bug 根因）
+                            val playEnter = remember(note.id) { shownIds.add(note.id) }
                             Box(Modifier.animateItem()) {
                                 NoteCard(
                                     note = note,

@@ -69,21 +69,25 @@ fun Modifier.pressScale(scale: Float) = graphicsLayer {
 /**
  * 错峰入场：一次性 fade + 轻微上浮（12dp）。
  * [order] 是入场序号，每项比前一项晚 40ms，封顶 240ms——整组在半秒内依次落定。
- * [enabled] 为 false 时直接置为完全可见（列表项滚出视口再回来时不重播动画）。
+ * [enabled] 为 false 时直接完全可见（列表项滚出视口再回来时不重播动画）。
+ *
+ * 必须是「分支式」实现而不是「参数式」：动画挂在 [LaunchedEffect](`Unit`) 上，
+ * 同一个组合实例内 key 永不变、协程绝不会被重启取消。若改回把 [enabled] 当
+ * effect key（`LaunchedEffect(enabled)`），enabled 在动画进行中翻转会取消在飞
+ * 的协程，alpha 永久冻在中途（通常 0）——内容透明但可点击，即首页白屏 bug
+ * （2026-10-31 真机实测）。
  */
 @Composable
 fun Modifier.staggerIn(order: Int, enabled: Boolean = true): Modifier {
-    val progress = remember { Animatable(if (enabled) 0f else 1f) }
-    LaunchedEffect(enabled) {
-        if (enabled) {
-            delay(min(order * 40L, 240L))
-            progress.animateTo(1f, Motion.emphasized())
-        }
+    if (!enabled) return Modifier
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(min(order * 40L, 240L))
+        progress.animateTo(1f, Motion.emphasized())
     }
-    val v = progress.value
     return graphicsLayer {
-        alpha = v
-        translationY = (1f - v) * 12.dp.toPx()
+        alpha = progress.value
+        translationY = (1f - progress.value) * 12.dp.toPx()
     }
 }
 
