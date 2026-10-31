@@ -2,21 +2,21 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "77102c9a8b2ecfb2d3c80e5c23ec9ac301572660",
-    "note": "2026-10-31 设置页改动只涉试听引擎关停/删模型/防抖/模型状态IO化，应用自更新卡（检查/下载/安装/令牌）零触碰",
-    "acked_at": "2026-10-31 16:07:52"
+    "sha1": "a081feeefbcf9d4e82730e34cde37eba4b0580a0",
+    "note": "本轮 LLM 配置方案只改 AI 模型节与 VM 的 LLM 状态，应用更新卡零改动，职能无关",
+    "acked_at": "2026-10-31 19:39:14"
    }
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "72db10c5ac58967b658909b00536da480d66503b",
-    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
-    "acked_at": "2026-10-31 18:36:04"
+    "sha1": "744f78012f37a9412ad185fb45fedee99dcba2ad",
+    "note": "本轮只加 llm_profiles/llm_active_profile 两键与配置方案 UI，transcribe_mode 及其界面零改动，职能无关",
+    "acked_at": "2026-10-31 19:39:15"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "426b78ea3bfd2bc1f6b118ebd4cda4a46e75423e",
-    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
-    "acked_at": "2026-10-31 18:36:04"
+    "sha1": "a081feeefbcf9d4e82730e34cde37eba4b0580a0",
+    "note": "本轮只加 llm_profiles/llm_active_profile 两键与配置方案 UI，transcribe_mode 及其界面零改动，职能无关",
+    "acked_at": "2026-10-31 19:39:15"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "ed37b63cfb367158f6c5bab7aab13a306aa2db75",
