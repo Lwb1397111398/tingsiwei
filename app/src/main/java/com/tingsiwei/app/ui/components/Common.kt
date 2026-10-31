@@ -1,5 +1,6 @@
 package com.tingsiwei.app.ui.components
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -20,9 +21,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -116,6 +120,7 @@ fun SectionCard(
 /**
  * 空状态：图标 + 标题 + 一句说明 + 可选操作。
  * 空页面最考验产品感，这里不用「暂无数据」，而是告诉用户下一步做什么。
+ * 整块有一次性的淡入 + 微放大登场（0.96→1，340ms），页面换 tab 回到空态时也有一瞬生命感。
  */
 @Composable
 fun EmptyState(
@@ -125,8 +130,20 @@ fun EmptyState(
     modifier: Modifier = Modifier,
     action: (@Composable () -> Unit)? = null,
 ) {
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        enter.animateTo(1f, tween(340, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+    }
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.xxl, vertical = Spacing.xl),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xxl, vertical = Spacing.xl)
+            .graphicsLayer {
+                alpha = enter.value
+                val s = 0.96f + 0.04f * enter.value
+                scaleX = s
+                scaleY = s
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Surface(

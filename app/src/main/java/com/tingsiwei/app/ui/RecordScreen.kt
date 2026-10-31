@@ -5,16 +5,28 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,9 +63,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -66,7 +82,11 @@ import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.record.RecordSession
 import com.tingsiwei.app.ui.components.InlineNotice
 import com.tingsiwei.app.ui.components.StatusDot
+import com.tingsiwei.app.ui.theme.Motion
 import com.tingsiwei.app.ui.theme.Spacing
+import com.tingsiwei.app.ui.theme.hapticConfirm
+import com.tingsiwei.app.ui.theme.pressScale
+import com.tingsiwei.app.ui.theme.rememberPressScale
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.launch
 
@@ -91,6 +111,7 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
         if (grants[Manifest.permission.RECORD_AUDIO] == true) vm.start()
         else vm.error.value = "没有麦克风权限，无法录音"
     }
+    val view = LocalView.current
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -114,11 +135,11 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
         ) {
             Spacer(Modifier.height(Spacing.lg))
 
-            // 状态行：一个点 + 一句话，替代原来干巴巴的「正在录音」
+            // 状态行：一个点 + 一句话，替代原来干巴巴的「正在录音」；录音中的红点缓慢呼吸
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     isRecording && !isPaused -> {
-                        StatusDot(MaterialTheme.colorScheme.error)
+                        PulsingDot(MaterialTheme.colorScheme.error)
                         Spacer(Modifier.width(8.dp))
                         Text(
                             "正在录音",
@@ -145,13 +166,18 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
 
             Spacer(Modifier.height(Spacing.lg))
 
-            // 计时：不录时也显示 00:00，但用弱色，避免「大数字空着」的突兀
+            // 计时：不录时也显示 00:00，但用弱色，避免「大数字空着」的突兀；色变跟随渐变
+            val timerColor by animateColorAsState(
+                targetValue = if (isRecording) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                animationSpec = tween(Motion.Standard),
+                label = "timerColor",
+            )
             Text(
                 Formatters.duration(durationMs),
                 style = MaterialTheme.typography.displayMedium,
                 fontWeight = FontWeight.Light,
-                color = if (isRecording) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = timerColor,
             )
 
             Spacer(Modifier.height(Spacing.sm))
@@ -173,6 +199,7 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                             App.get(), Manifest.permission.RECORD_AUDIO
                         ) == PackageManager.PERMISSION_GRANTED
                         if (granted) {
+                            view.hapticConfirm()
                             vm.start()
                         } else {
                             val perms = buildList {
@@ -198,11 +225,22 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
 
             Spacer(Modifier.height(Spacing.xl))
 
-            // 结束 / 取消：录音中才出现
-            AnimatedVisibility(visible = isRecording, enter = fadeIn(), exit = fadeOut()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            // 结束 / 取消：录音中才出现，从按钮下方展开
+            AnimatedVisibility(
+                visible = isRecording,
+                enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
+                exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Button(
-                        onClick = { vm.stopAndSave() },
+                        onClick = {
+                            view.hapticConfirm()
+                            vm.stopAndSave()
+                        },
                         shape = CircleShape,
                         modifier = Modifier.height(48.dp),
                     ) {
@@ -217,30 +255,52 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                 }
             }
 
-            error?.let {
-                Spacer(Modifier.height(Spacing.lg))
-                InlineNotice(
-                    text = it,
-                    container = MaterialTheme.colorScheme.errorContainer,
-                    content = MaterialTheme.colorScheme.onErrorContainer,
-                )
+            // 错误提示：展开出现、收起消失（缓存最后一次文案让退场有内容可显示）
+            val lastError = remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+            if (error != null) lastError.value = error
+            AnimatedVisibility(
+                visible = error != null,
+                enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
+                exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
+            ) {
+                lastError.value?.let {
+                    Column {
+                        Spacer(Modifier.height(Spacing.sm))
+                        InlineNotice(
+                            text = it,
+                            container = MaterialTheme.colorScheme.errorContainer,
+                            content = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(Spacing.xl))
 
-            // 系统识别的实时文字：独立成块，长文时不跟按钮抢空间
+            // 系统识别的实时文字：独立成块，长文时不跟按钮抢空间；新字进来时自动滚到底
             if (mode == TranscribeMode.SYSTEM) {
                 val showText = finalText + if (partialText.isNotEmpty()) "\n$partialText" else ""
-                if (showText.isNotBlank()) {
+                val liveScroll = rememberScrollState()
+                LaunchedEffect(showText) {
+                    if (showText.isNotBlank()) {
+                        liveScroll.animateScrollTo(liveScroll.maxValue, Motion.standard())
+                    }
+                }
+                AnimatedVisibility(
+                    visible = showText.isNotBlank(),
+                    enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
+                    exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
+                    modifier = Modifier.weight(1f, fill = false),
+                ) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                        modifier = Modifier.fillMaxWidth(),
                         shape = MaterialTheme.shapes.large,
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                     ) {
                         Column(
                             Modifier
                                 .padding(Spacing.lg)
-                                .verticalScroll(rememberScrollState()),
+                                .verticalScroll(liveScroll),
                         ) {
                             Text(
                                 "实时文字",
@@ -268,8 +328,8 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
 }
 
 /**
- * 录音主按钮：录音中换成红色暂停态 + 一圈缓慢扩散的光环（真实的「在录」反馈），
- * 暂停态为琥珀色，待机态是主色麦克风。
+ * 录音主按钮：录音中换成红色暂停态 + 双波纹光环（两圈错相扩散，像声波一圈圈发出去），
+ * 暂停态为琥珀色，待机态是主色麦克风。颜色渐变、图标缩放切换、按压微缩，全程无硬切。
  */
 @Composable
 private fun RecordButton(isRecording: Boolean, isPaused: Boolean, onClick: () -> Unit) {
@@ -289,49 +349,111 @@ private fun RecordButton(isRecording: Boolean, isPaused: Boolean, onClick: () ->
         isRecording -> Icons.Filled.Pause
         else -> Icons.Filled.Mic
     }
+    val containerColor by animateColorAsState(container, tween(Motion.Standard), label = "btnContainer")
+    val contentColor by animateColorAsState(content, tween(Motion.Standard), label = "btnContent")
 
-    // 呼吸光环：只在不暂停的录音中出现；用 scale + alpha，不改尺寸，不会引起布局抖动
-    val transition = rememberInfiniteTransition(label = "rec")
-    val pulseScale by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.18f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "pulseScale",
-    )
-    val pulseAlpha by transition.animateFloat(
-        initialValue = 0.28f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "pulseAlpha",
-    )
+    val interaction = remember { MutableInteractionSource() }
+    val scale = rememberPressScale(interaction, pressedScale = 0.94f)
 
     Box(contentAlignment = Alignment.Center) {
         if (isRecording && !isPaused) {
-            Box(
-                Modifier
-                    .size(104.dp)
-                    .scale(pulseScale)
-                    .background(scheme.error.copy(alpha = pulseAlpha), CircleShape),
-            )
+            RippleRing(delayMs = 0, color = scheme.error)
+            RippleRing(delayMs = RingPeriodMs / 2, color = scheme.error)
         }
         FilledIconButton(
             onClick = onClick,
-            modifier = Modifier.size(104.dp),
+            modifier = Modifier
+                .size(104.dp)
+                .pressScale(scale),
             shape = CircleShape,
+            interactionSource = interaction,
             colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = container,
-                contentColor = content,
+                containerColor = containerColor,
+                contentColor = contentColor,
             ),
         ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(42.dp))
+            AnimatedContent(
+                targetState = icon,
+                transitionSpec = {
+                    (scaleIn(Motion.standard(Motion.Snappy), initialScale = 0.55f) + fadeIn(tween(Motion.Snappy))) togetherWith
+                        (scaleOut(Motion.standard(Motion.Snappy), targetScale = 0.55f) + fadeOut(tween(Motion.Snappy)))
+                },
+                label = "recordIcon",
+            ) { ic ->
+                Icon(ic, contentDescription = null, modifier = Modifier.size(42.dp))
+            }
         }
     }
+}
+
+/** 波纹光环周期（单圈从发出到散尽）。 */
+private const val RingPeriodMs = 2000
+
+/**
+ * 一圈波纹：从按钮边缘向外扩散（scale 1→1.4），alpha 先快速亮起再缓缓散尽；
+ * [delayMs] 错开相位，两圈叠出「持续发出声波」的节奏。只动 scale/alpha，不抖布局。
+ */
+@Composable
+private fun RippleRing(delayMs: Int, color: Color) {
+    val transition = rememberInfiniteTransition(label = "ring$delayMs")
+    val scale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.4f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = RingPeriodMs
+                1f at 0 using LinearEasing
+                1.4f at RingPeriodMs using LinearEasing
+            },
+            initialStartOffset = StartOffset(delayMs),
+        ),
+        label = "ringScale",
+    )
+    val alpha by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = RingPeriodMs
+                0f at 0 using LinearEasing
+                0.30f at RingPeriodMs / 6 using LinearEasing
+                0f at RingPeriodMs using FastOutSlowInEasing
+            },
+            initialStartOffset = StartOffset(delayMs),
+        ),
+        label = "ringAlpha",
+    )
+    Box(
+        Modifier
+            .size(104.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+            }
+            .background(color, CircleShape),
+    )
+}
+
+/** 录音中的状态小点：缓慢呼吸（alpha 1↔0.35），给「在录」一个活的信号。 */
+@Composable
+private fun PulsingDot(color: Color) {
+    val transition = rememberInfiniteTransition(label = "pulseDot")
+    val alpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.35f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseDotAlpha",
+    )
+    Box(
+        Modifier
+            .size(8.dp)
+            .graphicsLayer { this.alpha = alpha }
+            .background(color, CircleShape),
+    )
 }
 
 private val recordVmFactory = object : ViewModelProvider.Factory {

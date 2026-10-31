@@ -5,15 +5,23 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -66,7 +75,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,7 +95,12 @@ import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.ui.components.EmptyState
 import com.tingsiwei.app.ui.components.StatusDot
 import com.tingsiwei.app.ui.components.StatusPill
+import com.tingsiwei.app.ui.theme.Motion
 import com.tingsiwei.app.ui.theme.Spacing
+import com.tingsiwei.app.ui.theme.hapticTick
+import com.tingsiwei.app.ui.theme.pressScale
+import com.tingsiwei.app.ui.theme.rememberPressScale
+import com.tingsiwei.app.ui.theme.staggerIn
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -158,12 +175,30 @@ fun HomeScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
+            val view = LocalView.current
+            // 「+」旋转 135° 变成「×」——图标连续转动，比 Add/Close 两枚图标硬切自然
+            val fabRotation by animateFloatAsState(
+                targetValue = if (menuOpen) 135f else 0f,
+                animationSpec = Motion.emphasized(),
+                label = "fabRotate",
+            )
             Column(horizontalAlignment = Alignment.End) {
-                // 展开态：三个动作竖排在主按钮上方，每个都带文字，不用猜图标意思
+                // 展开态：三个动作竖排在主按钮上方，每个都带文字，不用猜图标意思；
+                // 容器淡入锚在右下角（贴近 FAB），药丸各自再错峰上浮，先后落定
                 AnimatedVisibility(
                     visible = menuOpen,
-                    enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = 0.9f),
-                    exit = fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.9f),
+                    enter = fadeIn(tween(Motion.Snappy)) +
+                        scaleIn(
+                            Motion.standard(),
+                            initialScale = 0.9f,
+                            transformOrigin = TransformOrigin(1f, 1f),
+                        ),
+                    exit = fadeOut(tween(Motion.Snappy)) +
+                        scaleOut(
+                            Motion.standard(Motion.Snappy),
+                            targetScale = 0.9f,
+                            transformOrigin = TransformOrigin(1f, 1f),
+                        ),
                 ) {
                     Column(
                         horizontalAlignment = Alignment.End,
@@ -172,16 +207,19 @@ fun HomeScreen(
                         NewActionPill(
                             icon = Icons.Filled.Mic,
                             label = "开始录音",
+                            modifier = Modifier.staggerIn(0),
                             onClick = { menuOpen = false; onOpenRecord() },
                         )
                         NewActionPill(
                             icon = Icons.Filled.GraphicEq,
                             label = "导入音频文件",
+                            modifier = Modifier.staggerIn(1),
                             onClick = { menuOpen = false; importLauncher.launch(arrayOf("audio/*")) },
                         )
                         NewActionPill(
                             icon = Icons.Filled.Edit,
                             label = "输入文字 / 粘贴导图",
+                            modifier = Modifier.staggerIn(2),
                             onClick = { menuOpen = false; onOpenTextInput() },
                         )
                         Spacer(Modifier.height(2.dp))
@@ -194,14 +232,19 @@ fun HomeScreen(
                     shadowElevation = 6.dp,
                 ) {
                     IconButton(
-                        onClick = { menuOpen = !menuOpen },
+                        onClick = {
+                            menuOpen = !menuOpen
+                            view.hapticTick()
+                        },
                         modifier = Modifier.size(60.dp),
                     ) {
                         Icon(
-                            if (menuOpen) Icons.Filled.Close else Icons.Filled.Add,
+                            Icons.Filled.Add,
                             contentDescription = if (menuOpen) "收起" else "新建",
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(28.dp),
+                            modifier = Modifier
+                                .size(28.dp)
+                                .graphicsLayer { rotationZ = fabRotation },
                         )
                     }
                 }
@@ -241,6 +284,8 @@ fun HomeScreen(
                     }
                 }
                 else -> {
+                    // 已展示过的笔记不再重播入场动画（滚出去再滚回来时直接就位）
+                    val shownIds = remember { mutableSetOf<Long>() }
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
@@ -252,14 +297,23 @@ fun HomeScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
-                        items(notes.size) { i ->
-                            val note = notes[i]
-                            NoteCard(
-                                note = note,
-                                stage = stages[note.id],
-                                onClick = { onOpenNote(note.id) },
-                                onLongClick = { pendingDelete = note },
-                            )
+                        // 稳定 key：删除/更新时 animateItem 才能做出「淡出移位」而不是整列跳动
+                        itemsIndexed(
+                            notes,
+                            key = { _, n -> n.id },
+                            contentType = { _, _ -> "note" },
+                        ) { i, note ->
+                            val playEnter = note.id !in shownIds
+                            LaunchedEffect(note.id) { shownIds.add(note.id) }
+                            Box(Modifier.animateItem()) {
+                                NoteCard(
+                                    note = note,
+                                    stage = stages[note.id],
+                                    modifier = Modifier.staggerIn(i, enabled = playEnter),
+                                    onClick = { onOpenNote(note.id) },
+                                    onLongClick = { pendingDelete = note },
+                                )
+                            }
                         }
                     }
                 }
@@ -328,17 +382,28 @@ private fun SearchField(
                         .padding(horizontal = Spacing.md, vertical = 12.dp),
                 )
             }
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Filled.Close,
-                        "清除",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
+            // 清除按钮占一格固定宽度，出现/消失做缩放淡入，占位不跳
+            Box(Modifier.width(36.dp)) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = query.isNotEmpty(),
+                    enter = scaleIn(
+                        Motion.standard(Motion.Snappy),
+                        initialScale = 0.6f,
+                    ) + fadeIn(Motion.standard(Motion.Snappy)),
+                    exit = scaleOut(
+                        Motion.standard(Motion.Snappy),
+                        targetScale = 0.6f,
+                    ) + fadeOut(Motion.standard(Motion.Snappy)),
+                ) {
+                    IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            "清除",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-            } else {
-                Spacer(Modifier.width(Spacing.md))
             }
         }
     }
@@ -346,12 +411,18 @@ private fun SearchField(
 
 /** 新建入口的「药丸」按钮：图标 + 文字，浮在主按钮上方。 */
 @Composable
-private fun NewActionPill(icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun NewActionPill(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shadowElevation = 2.dp,
+        modifier = modifier,
     ) {
         Row(
             modifier = Modifier.padding(start = 14.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
@@ -375,10 +446,29 @@ private fun NewActionPill(icon: ImageVector, label: String, onClick: () -> Unit)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NoteListItem, stage: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteCard(
+    note: NoteListItem,
+    stage: String?,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val busy = note.status == NoteStatus.TRANSCRIBING || note.status == NoteStatus.GENERATING
+    // 按压缩放：按下时整卡轻轻缩到 97%，松手弹回——列表的「手感」来自这里
+    val interaction = remember { MutableInteractionSource() }
+    val scale = rememberPressScale(interaction)
     Surface(
-        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = modifier
+            .fillMaxWidth()
+            .pressScale(scale)
+            // 阶段药丸出现/消失时卡片高度平滑过渡，列表不跳
+            .animateContentSize(Motion.standard())
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 1.dp,
@@ -432,26 +522,42 @@ private fun NoteCard(note: NoteListItem, stage: String?, onClick: () -> Unit, on
                         modifier = Modifier.size(18.dp),
                     )
                 }
-                // 进度行：真实阶段文案来自 NoteProcessor，不是假进度
-                if (busy && !stage.isNullOrBlank()) {
-                    Spacer(Modifier.height(Spacing.sm))
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = MaterialTheme.shapes.small,
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                // 进度行：真实阶段文案来自 NoteProcessor，不是假进度；
+                // 文案变化（如「第2/9块 → 第3/9块」）用上滑过渡，而不是瞬间跳字
+                AnimatedVisibility(
+                    visible = busy && !stage.isNullOrBlank(),
+                    enter = fadeIn(tween(Motion.Snappy)) + slideInVertically(Motion.standard()) { it / 2 },
+                    exit = fadeOut(tween(Motion.Snappy)) + slideOutVertically(Motion.standard(Motion.Snappy)) { -it / 2 },
+                ) {
+                    Column {
+                        Spacer(Modifier.height(Spacing.sm))
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = MaterialTheme.shapes.small,
                         ) {
-                            StatusDot(MaterialTheme.colorScheme.primary, size = 6.dp)
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                stage,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                StatusDot(MaterialTheme.colorScheme.primary, size = 6.dp)
+                                Spacer(Modifier.width(6.dp))
+                                AnimatedContent(
+                                    targetState = stage.orEmpty(),
+                                    transitionSpec = {
+                                        (slideInVertically(Motion.standard()) { it } + fadeIn(tween(Motion.Snappy))) togetherWith
+                                            (slideOutVertically(Motion.standard()) { -it } + fadeOut(tween(Motion.Snappy)))
+                                    },
+                                    label = "stageText",
+                                ) { s ->
+                                    Text(
+                                        s,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         }
                     }
                 }

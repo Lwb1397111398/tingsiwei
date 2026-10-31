@@ -1,8 +1,20 @@
 package com.tingsiwei.app.ui
 
 import android.media.MediaPlayer
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -73,6 +85,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.imePadding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -91,6 +104,7 @@ import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.ui.components.EmptyState
 import com.tingsiwei.app.ui.components.MapController
 import com.tingsiwei.app.ui.components.MindMapPanel
+import com.tingsiwei.app.ui.theme.Motion
 import com.tingsiwei.app.ui.theme.Spacing
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.Dispatchers
@@ -171,32 +185,49 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         val n = note
-        Column(modifier = Modifier.padding(pad).fillMaxSize()) {
-            // 状态提示条：三种情形（进行中 / 出错 / 完成但有提示）统一成一块，视觉上不再各写一版
-            when {
-                n == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(modifier = Modifier.padding(pad).fillMaxSize().imePadding()) {
+            // 状态提示条：三种情形（进行中 / 出错 / 完成但有提示）统一成一块；
+            // 出现/消失带展开收起动画——生成完成时横幅是「收回去」而不是「啪一下没了」。
+            // banner 变 null 后退场动画期间仍显示最后一份内容（lastBanner 缓存）。
+            data class BannerUi(val text: String, val tone: BannerTone, val actionLabel: String? = null)
+            val banner: BannerUi? = when {
+                n == null -> null
+                n.status == NoteStatus.TRANSCRIBING || n.status == NoteStatus.GENERATING ->
+                    BannerUi(busyStage ?: "处理中…", BannerTone.Busy)
+                n.status == NoteStatus.ERROR -> BannerUi(
+                    n.errorMsg?.let { "出错：$it" } ?: "出错：未知原因",
+                    BannerTone.Error,
+                    actionLabel = "重试",
+                )
+                n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() ->
+                    // errorMsg 在 READY 态下是"提示"（如个别段未纳入），不是错误
+                    BannerUi(n.errorMsg, BannerTone.Notice, actionLabel = "补全")
+                else -> null
+            }
+            val lastBanner = remember { mutableStateOf<BannerUi?>(null) }
+            if (banner != null) lastBanner.value = banner
+            AnimatedVisibility(
+                visible = banner != null,
+                enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
+                exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
+            ) {
+                val b = lastBanner.value
+                if (b != null) {
+                    MessageBanner(
+                        text = b.text,
+                        tone = b.tone,
+                        actionLabel = b.actionLabel,
+                        onAction = b.actionLabel?.let { { vm.retry() } },
+                    )
+                }
+            }
+
+            if (n == null) {
+                // 笔记还没从数据库加载出来：整页居中加载
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                n.status == NoteStatus.TRANSCRIBING || n.status == NoteStatus.GENERATING -> {
-                    BusyBanner(text = busyStage ?: "处理中…")
-                }
-                n.status == NoteStatus.ERROR -> {
-                    MessageBanner(
-                        text = n.errorMsg?.let { "出错：$it" } ?: "出错：未知原因",
-                        actionLabel = "重试",
-                        onAction = { vm.retry() },
-                        tone = BannerTone.Error,
-                    )
-                }
-                n.status == NoteStatus.READY && !n.errorMsg.isNullOrBlank() -> {
-                    // errorMsg 在 READY 态下是"提示"（如个别段未纳入），不是错误
-                    MessageBanner(
-                        text = n.errorMsg,
-                        actionLabel = "补全",
-                        onAction = { vm.retry() },
-                        tone = BannerTone.Notice,
-                    )
-                }
+                return@Column
             }
 
             PillTabs(
@@ -206,21 +237,35 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 modifier = Modifier.padding(horizontal = Spacing.screen, vertical = Spacing.sm),
             )
 
-            // 三个标签叠放：导图 WebView 常驻组合（切页不销毁重建，保留缩放/平移位置），
-            // 其他标签页用不透明背景盖在上面
+            // 三个标签叠放：导图 WebView 常驻组合（切页不销毁重建，保留缩放/平移位置）；
+            // 原文/思路叠在 AnimatedContent 里，按切换方向左右轻滑——往右翻从右进，往左翻从左进
             Box(Modifier.weight(1f)) {
                 MapTab(n, vm, Modifier.fillMaxSize())
-                if (tab == 1) {
-                    TranscriptTab(
-                        n, vm,
-                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
-                    )
-                }
-                if (tab == 2) {
-                    ThinkingTab(
-                        n, vm,
-                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
-                    )
+                AnimatedContent(
+                    targetState = tab,
+                    transitionSpec = {
+                        val forward = targetState > initialState
+                        val enter = slideInHorizontally(Motion.standard(260)) { full ->
+                            if (forward) full / 12 else -full / 12
+                        } + fadeIn(tween(Motion.Standard))
+                        val exit = slideOutHorizontally(Motion.standard(260)) { full ->
+                            if (forward) -full / 12 else full / 12
+                        } + fadeOut(tween(Motion.Snappy))
+                        enter togetherWith exit
+                    },
+                    label = "detailTab",
+                ) { t ->
+                    when (t) {
+                        1 -> TranscriptTab(
+                            n, vm,
+                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        )
+                        2 -> ThinkingTab(
+                            n, vm,
+                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        )
+                        else -> Box(Modifier.fillMaxSize())
+                    }
                 }
             }
 
@@ -236,7 +281,10 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                     verticalAlignment = Alignment.Bottom,
                 ) {
                     Surface(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            // 多行输入时高度平滑增长，底栏不跳
+                            .animateContentSize(Motion.standard()),
                         shape = MaterialTheme.shapes.large,
                         color = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
@@ -628,6 +676,12 @@ private fun PillTabs(
                     animationSpec = androidx.compose.animation.core.tween(160),
                     label = "tabBg$i",
                 )
+                val fg by androidx.compose.animation.animateColorAsState(
+                    targetValue = if (active) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = androidx.compose.animation.core.tween(160),
+                    label = "tabFg$i",
+                )
                 Surface(
                     onClick = { onSelect(i) },
                     modifier = Modifier.weight(1f),
@@ -641,8 +695,7 @@ private fun PillTabs(
                         Text(
                             label,
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (active) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = fg,
                         )
                     }
                 }
@@ -705,11 +758,21 @@ private fun BusyBanner(text: String) {
             color = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.width(Spacing.md))
-        Text(
-            text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
+        // 阶段文案变化（「正在转写…」→「生成导图…」）时上滑换字，不生硬跳变
+        AnimatedContent(
+            targetState = text,
+            transitionSpec = {
+                (slideInVertically(Motion.standard()) { it / 2 } + fadeIn(tween(Motion.Snappy))) togetherWith
+                    (slideOutVertically(Motion.standard()) { -it / 2 } + fadeOut(tween(Motion.Snappy)))
+            },
+            label = "busyText",
+        ) { t ->
+            Text(
+                t,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
     }
 }
 

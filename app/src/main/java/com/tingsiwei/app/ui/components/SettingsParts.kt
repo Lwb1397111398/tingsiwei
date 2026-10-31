@@ -1,5 +1,9 @@
 package com.tingsiwei.app.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,9 +30,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -116,6 +122,7 @@ fun ToggleRow(
 /**
  * 单选行：用一个自绘小圆点代替 RadioButton。
  * Material 的 RadioButton 直径 20dp、离文字较远，一列四五项时显得松散；这里收成 18dp 并贴紧文字。
+ * 选中态切换全部带动画：底色渐变、圆点变色、内芯缩放弹出——不用生硬的「选中瞬间换色」。
  */
 @Composable
 fun ChoiceRow(
@@ -125,12 +132,28 @@ fun ChoiceRow(
     modifier: Modifier = Modifier,
     description: String? = null,
 ) {
+    val bg by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        else Color.Transparent,
+        animationSpec = tween(200),
+        label = "choiceBg",
+    )
+    val dotColor by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceContainerHighest,
+        animationSpec = tween(200),
+        label = "choiceDot",
+    )
+    val innerScale by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "choiceInner",
+    )
     Surface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.small,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-        else Color.Transparent,
+        color = bg,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 10.dp),
@@ -140,20 +163,18 @@ fun ChoiceRow(
                 Modifier
                     .padding(top = if (description == null) 0.dp else 3.dp)
                     .size(18.dp)
-                    .background(
-                        if (selected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        CircleShape,
-                    ),
+                    .background(dotColor, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                if (selected) {
-                    Box(
-                        Modifier
-                            .size(6.dp)
-                            .background(MaterialTheme.colorScheme.onPrimary, CircleShape),
-                    )
-                }
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .graphicsLayer {
+                            scaleX = innerScale
+                            scaleY = innerScale
+                        }
+                        .background(MaterialTheme.colorScheme.onPrimary, CircleShape),
+                )
             }
             Spacer(Modifier.width(Spacing.md))
             Column(Modifier.weight(1f)) {

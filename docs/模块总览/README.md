@@ -8,7 +8,7 @@
 
 | 模块 | 位置 | 职责 | 总览 |
 | --- | --- | --- | --- |
-| 入口与导航 | `app/src/main/java/com/tingsiwei/app/App.kt`、`MainActivity.kt`、`ui/AppNav.kt`、`ui/theme/Theme.kt`、`ui/theme/Tokens.kt`、`ui/components/Common.kt`、`app/src/main/AndroidManifest.xml` | 单 Activity + Compose Navigation，5 个路由：home / record / textinput / detail/{noteId} / settings；Application 单例；品牌主题（Palette 明暗两套 + 中文字体排版 + 五档圆角 + 间距，**不跟随系统动态取色**）与共享界面零件（状态药丸/空状态/区块容器/进度条）、导图画布配色（`MapTheme`）；权限与前台服务注册；顶层挂应用自更新弹窗与启动静默检查 | [入口与导航模块总览.md](入口与导航模块总览.md) |
+| 入口与导航 | `app/src/main/java/com/tingsiwei/app/App.kt`、`MainActivity.kt`、`ui/AppNav.kt`、`ui/theme/Theme.kt`、`ui/theme/Tokens.kt`、`ui/theme/Motion.kt`、`ui/components/Common.kt`、`app/src/main/AndroidManifest.xml` | 单 Activity + Compose Navigation，5 个路由：home / record / textinput / detail/{noteId} / settings；Application 单例；品牌主题（Palette 明暗两套 + 中文字体排版 + 五档圆角 + 间距，**不跟随系统动态取色**）与共享界面零件（状态药丸/空状态/区块容器/进度条）、导图画布配色（`MapTheme`）；全局动效令牌（时长/缓动/按压缩放/错峰入场/触感）；权限与前台服务注册；顶层挂应用自更新弹窗与启动静默检查 | [入口与导航模块总览.md](入口与导航模块总览.md) |
 | 首页 | `ui/HomeScreen.kt` | 笔记列表、状态徽标、新建入口 | [首页模块总览.md](首页模块总览.md) |
 | 录音页 | `ui/RecordScreen.kt` | 录音控制、实时字幕、进度与通知联动 | [录音页模块总览.md](录音页模块总览.md) |
 | 文字录入页 | `ui/TextInputScreen.kt` | 粘贴文字/缩进树导图直接建笔记 | [文字录入页模块总览.md](文字录入页模块总览.md) |
@@ -81,6 +81,8 @@
 - 模拟器镜像包名是 `system-images;android-37.0;google_apis_playstore;x86_64`（SDK 目录里的 `google_apis_playstore_ps16k` 目录是无效残留）
 
 ## 最后更新
+
+2026-10-31 · 动效精修批（8 个 UI 文件 + 新 Motion.kt）：全局页面切换过渡（AppNav 四向）、首页（FAB 旋转展开/列表错峰入场/卡片按压/进度药丸滑字）、录音页（双波纹光环/脉动红点/三态变色按键/控件展开）、文字录入页与详情页修键盘盖输入条真 bug（补 `imePadding`）、详情页标签方向感知滑动 + 横幅统一出入场、设置页分组错峰 + 条件块展开收起、UpdateDialog 进度条统一零件、ChoiceRow 选中态动画、EmptyState 入场。**全部动画只走 graphicsLayer 属性、时长封顶 340ms、常驻元素不呼吸**（仅录音态光环/红点例外——那是状态本身）；业务逻辑零改动。索引「入口与导航」行补 `ui/theme/Motion.kt`。验证：207 例单测全绿 + assembleDebug 成功 + 模拟器八项实测通过。
 
 2026-10-31 · 全库健康优化批（16 项，老板点单「全部优化」）：**P0 bug 五修**——设置页试听引擎泄漏（`onCleared` 关停）、删模型主线程卡顿 + 删后引擎不放（`LocalTtsEngine/LocalAsrEngine.release`）、LLM 取消掐不断在途请求（`Transport` 改 suspend + enqueue 可取消）、恢复版本可闪退（补 catch）、版本快照无限膨胀（`pruneTo` 封顶 20 份/篇）；**P2 旧账三清**——模型就绪阈值 200MB→`MODEL_BYTES` 同源、画布撤销补 `scheduleSave()`、PNG 导出死链路接通（新功能：详情页「导出图片」按钮）；**P1 性能五项**——识别引擎单例化（`LocalAsrEngine`，不再每篇重载 230MB）、设置写入防抖（600ms）、转写通知节流（500ms）、首页轻量投影 + SQL 搜索（`observeList`/`searchList` + `NoteListItem`）、原文页分块渲染；**P3 代码健康**——`SettingsRepository` 双份 25 字段映射合一、死代码清理（`onStateChange`/`MapController` 缩放五件/`shareText`/`VersionDao.delete`/`NoteDao.search`）、OkHttp 三处客户端共享 `util.Http.base` 底座。十三份模块总览同批更新。**验证**：`testDebugUnitTest` 207 例全绿（0 失败 0 跳过）+ `assembleDebug` 成功。**UNMEASURED**：PNG 导出真机出图、识别单例的模拟器转写冒烟、Room 迁移单测（评估结论：version=1 无迁移可测，MigrationTestHelper 需 instrumentation 或引入 Robolectric——等首次升版本写 `MIGRATION_1_2` 时一并建 androidTest，现在建是空测；防呆已由「移除破坏性迁移 + schema 快照入库」承担）。
 

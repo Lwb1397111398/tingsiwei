@@ -8,7 +8,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,11 +33,11 @@ fun UpdateDialog(vm: UpdateViewModel) {
                     Spacer(Modifier.height(8.dp))
                 }
                 if (vm.downloading) {
-                    Text("正在下载更新包… ${vm.progress}%")
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { vm.progress / 100f },
-                        modifier = Modifier.fillMaxWidth(),
+                    // 进度条走统一的 LabeledProgress（自带动画补间），与设置页下载进度同一观感
+                    com.tingsiwei.app.ui.components.LabeledProgress(
+                        label = "正在下载更新包",
+                        progress = vm.progress / 100f,
+                        trailing = "${vm.progress}%",
                     )
                 }
                 vm.downloadError?.let {

@@ -1,5 +1,11 @@
 package com.tingsiwei.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -89,7 +96,9 @@ import com.tingsiwei.app.ui.components.SettingsField
 import com.tingsiwei.app.ui.components.SettingHint
 import com.tingsiwei.app.ui.components.ThinDivider
 import com.tingsiwei.app.ui.components.ToggleRow
+import com.tingsiwei.app.ui.theme.Motion
 import com.tingsiwei.app.ui.theme.Spacing
+import com.tingsiwei.app.ui.theme.staggerIn
 import com.tingsiwei.app.util.Formatters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -168,12 +177,16 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
             modifier = Modifier
                 .padding(pad)
                 .fillMaxSize()
+                // 键盘弹出时收起内容高度，正在编辑的字段能滚动到可见区
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.screen),
             verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             Spacer(Modifier.height(Spacing.xs))
+            // 整页分组按序错峰入场：0.24s 内依次上浮落定，只在进页时播一次
             StatusOverview(
+                modifier = Modifier.staggerIn(0),
                 modelReady = modelState.state == ModelState.READY,
                 ttsReady = ttsModelState.state == TtsModelState.READY,
                 engine = ttsEngine,
@@ -182,6 +195,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- AI 模型 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(1),
                 icon = Icons.Filled.SmartToy,
                 title = "AI 模型",
                 subtitle = "决定用哪个大模型来生成导图和思路",
@@ -206,7 +220,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     label = "模型",
                     placeholder = "可手填，如 deepseek-chat",
                 )
-                if (models.isNotEmpty()) {
+                AnimatedSection(visible = models.isNotEmpty()) {
                     // 拉取到的模型直接平铺展示，点选即用；仍可手填
                     ChipPicker(
                         options = models.map { it to it },
@@ -228,11 +242,12 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         Text("保存", style = MaterialTheme.typography.labelLarge)
                     }
                 }
-                if (busy) BusyLine("请求中…")
+                AnimatedSection(visible = busy) { BusyLine("请求中…") }
             }
 
             // ---- 语音转文字 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(2),
                 icon = Icons.Filled.GraphicEq,
                 title = "语音转文字",
                 subtitle = "录音和导入的音频用哪种方式识别",
@@ -259,13 +274,14 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         else -> "未下载"
                     },
                 )
-                if (modelState.state == ModelState.DOWNLOADING) {
+                AnimatedSection(visible = modelState.state == ModelState.DOWNLOADING) {
                     LabeledProgress(
                         label = "正在下载识别模型",
                         progress = modelState.progress,
                         trailing = "${Formatters.fileSize(modelState.downloaded)} / ${Formatters.fileSize(modelState.total)}",
                     )
-                } else if (!modelReady) {
+                }
+                AnimatedSection(visible = modelState.state != ModelState.DOWNLOADING && !modelReady) {
                     SettingHint("约 230MB，只需下载一次。中途断开再点一次会接着下。")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -286,6 +302,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- 生成偏好 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(3),
                 icon = Icons.Filled.AutoAwesome,
                 title = "生成偏好",
                 subtitle = "AI 整理内容时的取舍",
@@ -307,6 +324,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- 长录音与限流 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(4),
                 icon = Icons.Filled.Speed,
                 title = "长录音与限流",
                 subtitle = "长内容怎么切、出错怎么退避",
@@ -344,6 +362,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- 朗读 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(5),
                 icon = Icons.Filled.Headphones,
                 title = "朗读",
                 subtitle = "把「思路」读给你听，走路吃饭时也能记",
@@ -383,15 +402,17 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     onClick = { vm.setTtsEngine(TtsEngine.CLOUD) },
                 )
 
-                if (ttsEngine == TtsEngine.LOCAL) {
+                // 切朗读引擎时，对应配置块展开/收起，而不是瞬间出现消失
+                AnimatedSection(visible = ttsEngine == TtsEngine.LOCAL) {
                     val ready = ttsModelState.state == TtsModelState.READY
-                    if (ttsModelState.state == TtsModelState.DOWNLOADING) {
+                    AnimatedSection(visible = ttsModelState.state == TtsModelState.DOWNLOADING) {
                         LabeledProgress(
                             label = "正在下载 kokoro 模型",
                             progress = ttsModelState.progress,
                             trailing = "${Formatters.fileSize(ttsModelState.downloaded)} / ${Formatters.fileSize(ttsModelState.total)}",
                         )
-                    } else {
+                    }
+                    AnimatedSection(visible = ttsModelState.state != TtsModelState.DOWNLOADING) {
                         InfoRow("kokoro 中英模型", if (ready) "已下载 ${Formatters.fileSize(ttsModelState.bytes)}" else "未下载")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -413,7 +434,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     }
                 }
 
-                if (ttsEngine == TtsEngine.CLOUD) {
+                AnimatedSection(visible = ttsEngine == TtsEngine.CLOUD) {
                     ThinDivider()
                     // 两档：官方 ElevenLabs 只填 Key；自定义填任意 OpenAI 兼容渠道。两档配置互不覆盖
                     ChoiceRow(
@@ -428,7 +449,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         selected = ttsCloudProvider == TtsCloudProvider.CUSTOM,
                         onClick = { vm.setTtsCloudProvider(TtsCloudProvider.CUSTOM) },
                     )
-                    if (ttsCloudProvider == TtsCloudProvider.ELEVEN) {
+                    AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.ELEVEN) {
                         SettingsField(
                             value = ttsElevenKey,
                             onValueChange = { vm.setTtsElevenKey(it) },
@@ -455,7 +476,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             label = "音色",
                             placeholder = "点「获取音色」选择，或手填音色 ID",
                         )
-                        if (elevenVoices.isNotEmpty()) {
+                        AnimatedSection(visible = elevenVoices.isNotEmpty()) {
                             ChipPicker(
                                 options = elevenVoices.map { it.id to it.label },
                                 selectedValue = ttsElevenVoice,
@@ -472,10 +493,11 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             OutlinedButton(onClick = { vm.fetchElevenVoices() }, enabled = !elevenBusy) {
                                 Text("获取音色")
                             }
-                            if (elevenBusy) BusyLine("获取中…")
+                            AnimatedSection(visible = elevenBusy) { BusyLine("获取中…") }
                         }
                         SettingHint("官方音色都能读中文；换模型或音色后点「试听」验证。")
-                    } else {
+                    }
+                    AnimatedSection(visible = ttsCloudProvider != TtsCloudProvider.ELEVEN) {
                         SettingsField(
                             value = ttsCloudUrl,
                             onValueChange = { vm.setTtsCloudUrl(it) },
@@ -496,7 +518,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             label = "朗读模型",
                             placeholder = "点「检索模型」选，或手填",
                         )
-                        if (ttsModels.isNotEmpty()) {
+                        AnimatedSection(visible = ttsModels.isNotEmpty()) {
                             ChipPicker(
                                 options = ttsModels.map { it to it },
                                 selectedValue = ttsCloudModel,
@@ -505,7 +527,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                                     keyboard?.hide()
                                 },
                             )
-                            if (ttsModelsAll) {
+                            AnimatedSection(visible = ttsModelsAll) {
                                 SettingHint("这个渠道没标出明确的语音模型，上面是全部模型——点选后试听验证。")
                             }
                         }
@@ -516,7 +538,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             OutlinedButton(onClick = { vm.fetchTtsModels() }, enabled = !ttsBusy) {
                                 Text("检索模型")
                             }
-                            if (ttsBusy) BusyLine("检索中…")
+                            AnimatedSection(visible = ttsBusy) { BusyLine("检索中…") }
                         }
                         SettingsField(
                             value = ttsCloudVoice,
@@ -524,7 +546,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             label = "音色（可手填）",
                         )
                         val voicePresets = CloudTts.voicePresetsFor(ttsCloudModel)
-                        if (voicePresets.isNotEmpty()) {
+                        AnimatedSection(visible = voicePresets.isNotEmpty()) {
                             ChipPicker(
                                 options = voicePresets.map { (name, label) ->
                                     name to label
@@ -538,7 +560,11 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                                 "朗读正文出错会自动回落到离线/系统语音并提示原因。"
                         )
                     }
-                } else if (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()) {
+                }
+                AnimatedSection(
+                    visible = ttsEngine != TtsEngine.CLOUD &&
+                        (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()),
+                ) {
                     // 最常见的「填了没反应」：配置都在，引擎却没切过来
                     InlineNotice(
                         text = "已填写在线朗读的 Key，但当前引擎不是「在线朗读」——要用它的声音，点选上面的「在线朗读」。",
@@ -565,6 +591,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- 应用更新 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(6),
                 icon = Icons.Filled.SystemUpdate,
                 title = "应用更新",
                 subtitle = "手机上直接升级，不用连电脑传 APK",
@@ -610,6 +637,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
             // ---- 关于 ----
             SettingsSection(
+                modifier = Modifier.staggerIn(7),
                 icon = Icons.Filled.Info,
                 title = "关于",
                 subtitle = "听的思维 · 录音变成思维导图",
@@ -631,11 +659,17 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
  * 不是错误，只是还没做，用报警色会让人以为出了问题。
  */
 @Composable
-private fun StatusOverview(modelReady: Boolean, ttsReady: Boolean, engine: String, model: String) {
+private fun StatusOverview(
+    modelReady: Boolean,
+    ttsReady: Boolean,
+    engine: String,
+    model: String,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -698,9 +732,10 @@ private fun SettingsSection(
     icon: ImageVector,
     title: String,
     subtitle: String,
+    modifier: Modifier = Modifier,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
@@ -730,6 +765,24 @@ private fun SettingsSection(
 }
 
 enum class ModelState { UNKNOWN, READY, DOWNLOADING, NOT_DOWNLOADED }
+
+/**
+ * 条件块的展开/收起容器：设置页里「选中某引擎才出现的配置」「下载进度」等统一用它，
+ * 出现时纵向展开 + 淡入，消失时收回——不再生硬地瞬间出现/消失。
+ */
+@Composable
+private fun AnimatedSection(
+    visible: Boolean,
+    content: @Composable () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
+        exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
+    ) {
+        content()
+    }
+}
 
 data class ModelStateUi(
     val state: ModelState = ModelState.UNKNOWN,

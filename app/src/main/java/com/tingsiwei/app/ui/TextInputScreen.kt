@@ -1,5 +1,14 @@
 package com.tingsiwei.app.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.imePadding
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteSource
@@ -128,7 +138,12 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
         },
     ) { pad ->
         Column(
-            modifier = Modifier.padding(pad).fillMaxSize().padding(horizontal = Spacing.screen),
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                // 键盘弹出时整体上移：输入区和底部按钮不被键盘盖住（edge-to-edge 下必须自己消费 ime）
+                .imePadding()
+                .padding(horizontal = Spacing.screen),
         ) {
             // 标题：无边框，用大字号直接写，像在纸上起标题
             TitleField(
@@ -172,18 +187,29 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                 }
             }
 
-            error?.let {
-                Spacer(Modifier.height(Spacing.sm))
-                Text(
-                    it,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            // 错误提示：展开出现、收起消失（缓存最后一次文案，退场时有内容可显示）
+            val lastError = remember { mutableStateOf<String?>(null) }
+            if (error != null) lastError.value = error
+            AnimatedVisibility(
+                visible = error != null,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                lastError.value?.let {
+                    Column {
+                        Spacer(Modifier.height(Spacing.sm))
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(Spacing.md))
 
-            // 两个动作并排，主按钮说明它会做什么
+            // 两个动作并排，主按钮说明它会做什么；提交中图标↔加载圈平滑过渡
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = { save(asMap = false) },
@@ -191,16 +217,27 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                     modifier = Modifier.weight(1f).height(52.dp),
                     shape = MaterialTheme.shapes.medium,
                 ) {
-                    if (submitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Icon(Icons.Filled.AutoAwesome, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("生成导图 + 思路")
+                    AnimatedContent(
+                        targetState = submitting,
+                        transitionSpec = {
+                            (scaleIn(initialScale = 0.7f) + fadeIn()) togetherWith
+                                (scaleOut(targetScale = 0.7f) + fadeOut())
+                        },
+                        label = "submitBtn",
+                    ) { busy ->
+                        if (busy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.AutoAwesome, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("生成导图 + 思路")
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.width(Spacing.md))
