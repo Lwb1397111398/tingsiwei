@@ -5,6 +5,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +20,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -196,7 +200,7 @@ fun ChoiceRow(
     }
 }
 
-/** 可点选标签组（模型名、音色名这类不定长选项）。 */
+/** 可点选标签组（模型名、音色名这类不定长选项）。传 onDelete 时每个标签尾部带 ✕ 删除钮。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChipPicker(
@@ -204,6 +208,7 @@ fun ChipPicker(
     selectedValue: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onDelete: ((String) -> Unit)? = null,
 ) {
     FlowRow(
         modifier = modifier.fillMaxWidth(),
@@ -214,7 +219,27 @@ fun ChipPicker(
             FilterChip(
                 selected = selectedValue == value,
                 onClick = { onSelect(value) },
-                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                label = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, style = MaterialTheme.typography.labelSmall)
+                        if (onDelete != null) {
+                            // 内层 clickable 消费掉点按，不会误触发标签本身的 onSelect
+                            Box(
+                                Modifier
+                                    .padding(start = 5.dp)
+                                    .size(16.dp)
+                                    .clickable { onDelete(value) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "删除 $label",
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                        }
+                    }
+                },
                 shape = CircleShape,
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,

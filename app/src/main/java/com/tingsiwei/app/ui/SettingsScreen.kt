@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,12 +36,14 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -68,6 +71,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
+import com.tingsiwei.app.data.LlmProfile
 import com.tingsiwei.app.data.SettingsRepository
 import com.tingsiwei.app.data.TtsCloudDefaults
 import com.tingsiwei.app.data.TtsCloudProvider
@@ -143,9 +147,15 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val modelState by vm.modelState.collectAsState()
     val message by vm.message.collectAsState()
     val busy by vm.busy.collectAsState()
+    val profiles by vm.profiles.collectAsState()
+    val activeProfile by vm.activeProfile.collectAsState()
 
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbar = remember { SnackbarHostState() }
+    // 「存为配置」「删除配置」两个弹窗的本地状态
+    var showSaveProfileDialog by remember { mutableStateOf(false) }
+    var profileNameInput by remember { mutableStateOf("") }
+    var deleteProfileTarget by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -191,6 +201,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                 ttsReady = ttsModelState.state == TtsModelState.READY,
                 engine = ttsEngine,
                 model = model,
+                profile = activeProfile,
             )
 
             // ---- AI 模型 ----
@@ -202,21 +213,21 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
             ) {
                 SettingsField(
                     value = url,
-                    onValueChange = { vm.url.value = it },
+                    onValueChange = { vm.editUrl(it) },
                     label = "接口地址",
                     placeholder = "https://api.xxx.com 或 https://api.xxx.com/v1",
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 )
                 SettingsField(
                     value = key,
-                    onValueChange = { vm.key.value = it },
+                    onValueChange = { vm.editKey(it) },
                     label = "API Key",
                     placeholder = "sk-…",
                     obscure = true,
                 )
                 SettingsField(
                     value = model,
-                    onValueChange = { vm.model.value = it },
+                    onValueChange = { vm.editModel(it) },
                     label = "模型",
                     placeholder = "可手填，如 deepseek-chat",
                 )
@@ -226,12 +237,27 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         options = models.map { it to it },
                         selectedValue = model,
                         onSelect = {
-                            vm.model.value = it
+                            vm.editModel(it)
                             keyboard?.hide()
                         },
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                // 已保存的配置方案：点一套即整套切换（地址、Key、模型一起换），✕ 删除
+                // AnimatedSection 内部没有布局容器，多个子元素会叠绘——必须自己包 Column
+                AnimatedSection(visible = profiles.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        ThinDivider()
+                        SettingHint("已保存的配置", color = MaterialTheme.colorScheme.onSurface)
+                        ChipPicker(
+                            options = profiles.map { it.name to it.name },
+                            selectedValue = activeProfile,
+                            onSelect = { vm.applyProfile(it) },
+                            onDelete = { deleteProfileTarget = it },
+                        )
+                        SettingHint("点一套即整套切换；改动上面任一项就脱离了所选配置。")
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     OutlinedButton(onClick = { vm.fetchModels() }, enabled = !busy) {
                         Text("获取模型列表", style = MaterialTheme.typography.labelLarge)
                     }
@@ -240,6 +266,16 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     }
                     Button(onClick = { vm.save() }, enabled = !busy) {
                         Text("保存", style = MaterialTheme.typography.labelLarge)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            // 预填当前选中的方案名：改了 Key/模型后想更新那份配置，直接覆盖
+                            profileNameInput = activeProfile
+                            showSaveProfileDialog = true
+                        },
+                        enabled = !busy,
+                    ) {
+                        Text("存为配置", style = MaterialTheme.typography.labelLarge)
                     }
                 }
                 AnimatedSection(visible = busy) { BusyLine("请求中…") }
@@ -650,6 +686,67 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
             }
         }
     }
+
+    // ---- 「存为配置」弹窗：把当前三项起个名字存成一套配置；同名覆盖 ----
+    if (showSaveProfileDialog) {
+        val duplicate = profiles.any { it.name == profileNameInput.trim() }
+        AlertDialog(
+            onDismissRequest = { showSaveProfileDialog = false },
+            title = { Text("存为配置") },
+            text = {
+                Column {
+                    Text(
+                        "把当前填写的地址、API Key、模型存成一套配置，以后点一下就能整套切换。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(Spacing.md))
+                    OutlinedTextField(
+                        value = profileNameInput,
+                        onValueChange = { profileNameInput = it },
+                        label = { Text("配置名称") },
+                        singleLine = true,
+                    )
+                    if (duplicate) {
+                        Spacer(Modifier.height(Spacing.sm))
+                        Text(
+                            "已有同名配置，保存会覆盖它",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.saveProfileAs(profileNameInput)
+                        showSaveProfileDialog = false
+                    },
+                    enabled = profileNameInput.isNotBlank(),
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveProfileDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    // ---- 「删除配置」确认弹窗：只删保存的那份，正在使用的接口设置不动 ----
+    deleteProfileTarget?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deleteProfileTarget = null },
+            title = { Text("删除配置「$name」？") },
+            text = { Text("只删除这份保存的配置；当前正在使用的接口设置不受影响。") },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteProfile(name); deleteProfileTarget = null }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteProfileTarget = null }) { Text("取消") }
+            },
+        )
+    }
 }
 
 /**
@@ -664,6 +761,7 @@ private fun StatusOverview(
     ttsReady: Boolean,
     engine: String,
     model: String,
+    profile: String,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -679,7 +777,11 @@ private fun StatusOverview(
             )
             StatusLine(
                 "AI 模型",
-                if (model.isBlank()) "未选择，填下面三项即可" else model,
+                when {
+                    model.isBlank() -> "未选择，填下面三项即可"
+                    profile.isNotBlank() -> "$profile · $model"
+                    else -> model
+                },
                 ok = model.isNotBlank(),
             )
             StatusLine("识别模型", if (modelReady) "已就绪" else "未下载", ok = modelReady)
@@ -846,6 +948,9 @@ class SettingsViewModel : ViewModel() {
     val modelState = MutableStateFlow(ModelStateUi())
     val message = MutableStateFlow<String?>(null)
     val busy = MutableStateFlow(false)
+    /** 已保存的 LLM 配置方案；activeProfile = 当前选中的方案名（空 = 没选或已手改偏离） */
+    val profiles = MutableStateFlow<List<LlmProfile>>(emptyList())
+    val activeProfile = MutableStateFlow("")
 
     init {
         viewModelScope.launch {
@@ -869,6 +974,8 @@ class SettingsViewModel : ViewModel() {
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
+            profiles.value = repo.llmProfiles()
+            activeProfile.value = repo.activeLlmProfile()
         }
     }
 
@@ -896,6 +1003,72 @@ class SettingsViewModel : ViewModel() {
             } finally {
                 busy.value = false
             }
+        }
+    }
+
+    // ---- LLM 配置方案 ----
+
+    // 三个输入框的改动经这里走：一旦手改，当前值就不再等于所选方案，选中标记立即撤销
+    fun editUrl(v: String) {
+        url.value = v
+        driftFromProfile()
+    }
+
+    fun editKey(v: String) {
+        key.value = v
+        driftFromProfile()
+    }
+
+    fun editModel(v: String) {
+        model.value = v
+        driftFromProfile()
+    }
+
+    private fun driftFromProfile() {
+        if (activeProfile.value.isNotEmpty()) {
+            activeProfile.value = ""
+            viewModelScope.launch { repo.setActiveLlmProfile("") }
+        }
+    }
+
+    /** 点选一套配置：三项一起换并落库，立即生效（生成链路读的就是这三键） */
+    fun applyProfile(name: String) {
+        val p = profiles.value.firstOrNull { it.name == name } ?: return
+        url.value = p.url
+        key.value = p.key
+        model.value = p.model
+        activeProfile.value = name
+        viewModelScope.launch {
+            repo.setLlm(p.url, p.key, p.model)
+            repo.setActiveLlmProfile(name)
+        }
+        message.value = "已切换到「$name」"
+    }
+
+    /** 把当前填写的三项保存并另存为命名配置（同名覆盖）；「存为配置」隐含先保存 */
+    fun saveProfileAs(rawName: String) {
+        val name = rawName.trim()
+        if (name.isEmpty()) return
+        viewModelScope.launch {
+            repo.setLlm(url.value, key.value, model.value)
+            repo.saveLlmProfile(LlmProfile(name, url.value.trim(), key.value.trim(), model.value.trim()))
+            profiles.value = repo.llmProfiles()
+            activeProfile.value = name
+            repo.setActiveLlmProfile(name)
+            message.value = "已存为「$name」，点标签即可随时切换"
+        }
+    }
+
+    /** 删除一份配置；若删的是当前选中的，只清选中标记，接口三项保持不动（正在用的不受影响） */
+    fun deleteProfile(name: String) {
+        viewModelScope.launch {
+            repo.deleteLlmProfile(name)
+            profiles.value = repo.llmProfiles()
+            if (activeProfile.value == name) {
+                activeProfile.value = ""
+                repo.setActiveLlmProfile("")
+            }
+            message.value = "已删除配置「$name」"
         }
     }
 

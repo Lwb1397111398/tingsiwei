@@ -94,6 +94,8 @@ class SettingsRepository(private val context: Context) {
         val llmUrl = stringPreferencesKey("llm_url")
         val llmKey = stringPreferencesKey("llm_key")
         val llmModel = stringPreferencesKey("llm_model")
+        val llmProfiles = stringPreferencesKey("llm_profiles")
+        val llmActiveProfile = stringPreferencesKey("llm_active_profile")
         val transcribeMode = stringPreferencesKey("transcribe_mode")
         val allowExpand = booleanPreferencesKey("allow_expand")
         val ttsRate = floatPreferencesKey("tts_rate")
@@ -175,6 +177,35 @@ class SettingsRepository(private val context: Context) {
             p[K.llmUrl] = url.trim()
             p[K.llmKey] = key.trim()
             p[K.llmModel] = model.trim()
+        }
+    }
+
+    // ---- LLM 配置方案（多套命名的接口配置，设置页点选即整套切换） ----
+
+    /** 已保存的配置方案列表；存量损坏时按空处理（decode 不抛异常） */
+    suspend fun llmProfiles(): List<LlmProfile> =
+        context.dataStore.data.first()[K.llmProfiles]?.let(::decodeLlmProfiles).orEmpty()
+
+    /** 最近一次点选生效的方案名；空 = 没选过，或手改过任一项已偏离所选方案 */
+    suspend fun activeLlmProfile(): String =
+        context.dataStore.data.first()[K.llmActiveProfile].orEmpty()
+
+    suspend fun setActiveLlmProfile(name: String) {
+        context.dataStore.edit { it[K.llmActiveProfile] = name }
+    }
+
+    /** 新增或覆盖同名方案（同名 = 更新那份配置） */
+    suspend fun saveLlmProfile(profile: LlmProfile) {
+        context.dataStore.edit { p ->
+            val list = p[K.llmProfiles]?.let(::decodeLlmProfiles).orEmpty()
+            p[K.llmProfiles] = encodeLlmProfiles(upsertLlmProfile(list, profile))
+        }
+    }
+
+    suspend fun deleteLlmProfile(name: String) {
+        context.dataStore.edit { p ->
+            val list = p[K.llmProfiles]?.let(::decodeLlmProfiles).orEmpty()
+            p[K.llmProfiles] = encodeLlmProfiles(removeLlmProfile(list, name))
         }
     }
 
