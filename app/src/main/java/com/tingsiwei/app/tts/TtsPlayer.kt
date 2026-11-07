@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import com.tingsiwei.app.data.TtsCloudProvider
 import com.tingsiwei.app.data.TtsEngine
 import com.tingsiwei.app.transcribe.ModelManager
@@ -13,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -70,8 +72,12 @@ class TtsPlayer(
         liveRate = rate
         when (engine) {
             TtsEngine.CLOUD -> {
-                if (cloud == null || cloud.key.isBlank()) {
-                    val target = if (cloud?.provider == TtsCloudProvider.ELEVEN) "ElevenLabs 的" else "语音服务的"
+                if (cloud == null || (cloud.key.isBlank() && cloud.key2.isBlank())) {
+                    val target = when (cloud?.provider) {
+                        TtsCloudProvider.ELEVEN -> "ElevenLabs 的"
+                        TtsCloudProvider.LATENT -> "公益站的"
+                        else -> "语音服务的"
+                    }
                     onMessage?.invoke("还没配置在线朗读：到设置页「朗读」里填${target}API Key")
                 } else {
                     speakCloud(text, cloud, fallback)
@@ -350,6 +356,8 @@ class TtsPlayer(
      * 云端流式朗读：逐句请求、AudioTrack 跨句复用（与离线引擎同构），失败自动退回离线/系统语音并明说。
      * 缓冲给足约 10 秒：一句写完时缓冲里还压着没播的量，足够盖住下一句的网络往返，句间不出缝。
      * 每句请求前取一次 liveRate，朗读中拖调速条下一句生效。
+     * 整段型客户端（公益站 LatentTts，双 Key）走预取流水线：播放第 N 句时用另一把 Key 生成第 N+1 句，
+     * 写完当前句（≈播放 10 秒）时下一句多半已就绪，句间零等待还摊薄了单号限流。
      */
     private fun speakCloud(text: String, cfg: CloudTtsConfig, fallback: Boolean) {
         playing.set(true)
@@ -359,6 +367,7 @@ class TtsPlayer(
             try {
                 val client: CloudTtsClient = when (cfg.provider) {
                     TtsCloudProvider.ELEVEN -> ElevenTts(cfg = cfg)
+                    TtsCloudProvider.LATENT -> LatentTts(cfg = cfg)
                     else -> CloudTts(cfg = cfg)
                 }
                 val sampleRate = CloudTts.SAMPLE_RATE
@@ -386,15 +395,54 @@ class TtsPlayer(
                 this@TtsPlayer.track = t
                 t.play()
                 var totalFrames = 0
-                for (chunk in splitForSpeech(text, maxChars = 120)) {
-                    if (!playing.get()) break
-                    client.streamPcm(chunk, liveRate) { pcm ->
-                        if (!playing.get()) return@streamPcm false
-                        if (pcm.isNotEmpty()) {
-                            totalFrames += pcm.size
-                            t.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                if (client.deliversWholeChunks) {
+                    // ---- 预取流水线（整段型客户端）：请求第 N+1 句与播放第 N 句并行 ----
+                    // 时序：拿到第 N 句 → 立刻后台发起第 N+1 句 → 阻塞写第 N 句（≈10 秒播放时长）
+                    // → 写完 await 第 N+1 句（已经生成了 10 秒）。预取失败不炸整篇：置 null 回退同步请求。
+                    val chunks = splitForSpeech(text, maxChars = 120)
+                    var prefetch: kotlinx.coroutines.Deferred<ShortArray?>? = null
+                    try {
+                        for (i in chunks.indices) {
+                            if (!playing.get()) break
+                            val pf = prefetch
+                            val pcm: ShortArray = when {
+                                pf == null -> synthWhole(client, chunks[i])
+                                // 预取失败（null）回退同步请求当前句；预取成功直接用
+                                else -> pf.await() ?: synthWhole(client, chunks[i])
+                            }
+                            if (!playing.get()) break
+                            if (i + 1 < chunks.size) {
+                                val next = chunks[i + 1]
+                                prefetch = async {
+                                    try {
+                                        synthWhole(client, next)
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Log.w("TtsPlayer", "预取下一句失败（${e.message}），播放到那时改同步请求")
+                                        null
+                                    }
+                                }
+                            }
+                            if (pcm.isNotEmpty()) {
+                                totalFrames += pcm.size
+                                t.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                            }
                         }
-                        playing.get()
+                    } finally {
+                        prefetch?.cancel()
+                    }
+                } else {
+                    for (chunk in splitForSpeech(text, maxChars = 120)) {
+                        if (!playing.get()) break
+                        client.streamPcm(chunk, liveRate) { pcm ->
+                            if (!playing.get()) return@streamPcm false
+                            if (pcm.isNotEmpty()) {
+                                totalFrames += pcm.size
+                                t.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                            }
+                            playing.get()
+                        }
                     }
                 }
                 // 全部请求完了，等缓冲区里最后一段播出去
@@ -441,6 +489,16 @@ class TtsPlayer(
             }
             playing.set(false)
         }
+    }
+
+    /** 整段型客户端取一句：整段回调攒成数组返回（仅 deliversWholeChunks=true 的客户端走这里） */
+    private fun synthWhole(client: CloudTtsClient, chunk: String): ShortArray {
+        var acc = ShortArray(0)
+        client.streamPcm(chunk, liveRate) { pcm ->
+            acc = pcm
+            false
+        }
+        return acc
     }
 }
 

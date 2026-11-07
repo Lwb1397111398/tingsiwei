@@ -2,22 +2,24 @@
 
 ## 模块职责
 
-把笔记的「记忆思路」朗读出来：`TtsPlayer` 按设置在「系统 TextToSpeech」「sherpa-onnx kokoro 离线模型」「云端大模型在线朗读」三个引擎之间分发，长文按句切块合成出声，朗读中可随时调速，引擎缺东西时明说提示、绝不静默失败；朗读正文在线失败还自动退回离线/系统引擎把这次读完。在线引擎分两档服务（设置页二选一，默认官方）：**官方 ElevenLabs**（`ElevenTts`，接口地址/鉴权头/协议全内置，用户只填 API Key 并挑音色，音色可在线拉官方列表点选）与**自定义 OpenAI 兼容**（`CloudTts`，任何 `/audio/speech` 兼容服务，模型可手填或「检索模型」点选，格式被拒自动 PCM→WAV 回退）。两档共用同一个流式播放骨架（`CloudTtsClient` 接口）与失败回落逻辑。
+把笔记的「记忆思路」朗读出来：`TtsPlayer` 按设置在「系统 TextToSpeech」「sherpa-onnx kokoro 离线模型」「云端大模型在线朗读」三个引擎之间分发，长文按句切块合成出声，朗读中可随时调速，引擎缺东西时明说提示、绝不静默失败；朗读正文在线失败还自动退回离线/系统引擎把这次读完。在线引擎分三档服务（设置页三选一，默认公益站）：**公益站 Latent**（`LatentTts`，audio.latent.moe 中文公益站，双 Key 句间轮换 + 播放当前句时预取下一句，整段 WAV）、**官方 ElevenLabs**（`ElevenTts`，接口地址/鉴权头/协议全内置，用户只填 API Key 并挑音色，音色可在线拉官方列表点选）与**自定义 OpenAI 兼容**（`CloudTts`，任何 `/audio/speech` 兼容服务，模型可手填或「检索模型」点选，格式被拒自动 PCM→WAV 回退）。三档共用同一个播放骨架（`CloudTtsClient` 接口）与失败回落逻辑。
 
 ## 运作流程
 
 **从哪来**：两个入口。
 
 1. 详情页「思路」标签底部按钮（`ui/DetailScreen.kt`）→ `DetailViewModel.toggleTts()`（`DetailScreen.kt:629-634`）从 Room 读 `n.thinking` → `toggleTtsText(thinking)`（`DetailScreen.kt:638-649`）：正在读就 `tts.stop()`，否则读 `settingsRepo.current()`，引擎是 cloud 时用 `CloudTtsConfig.fromSettings(s)` 按服务档位组装配置（官方档取 `ttsElevenKey/Voice/Model` + 内置地址；自定义档取 `ttsCloudUrl/Key/Voice/Model`）→ `tts.speak(text, ttsRate.value, s.ttsEngine, cloud)`（`:643`）→ `ttsSpeaking` 置 true、`while (tts.isSpeaking) delay(300)` 轮询。`TtsPlayer` 实例是 VM 的 `by lazy`，构造传入的 `onMessage` 回调写入 `ttsMessage`，UI 侧 `LaunchedEffect` 弹 Snackbar。
-2. 设置页「朗读」卡片「试听当前引擎」按钮（`ui/SettingsScreen.kt`）→ `togglePreview()` 用固定句子调 `previewTts.speak(..., ttsEngine.value, cloudConfig(), fallback = engine != CLOUD)`（`cloudConfig` 从设置页当前填写值按服务档位组装：官方档取 ElevenLabs Key/音色/模型三态 + 内置地址，自定义档取地址/Key/音色/模型四件套）；`previewTts` 也是 `by lazy`，`onMessage` 写入设置页自己的 `message` Snackbar 通道。**试听传 `fallback=false`**：在线试听失败只弹准确原因，不静默换成离线/系统声音——试听的目的就是验证在线通不通。自定义档另有「检索模型」按钮 → `fetchTtsModels()`（必须 `withContext(Dispatchers.IO)`，见坑 13）→ `CloudTts.fetchModels()` GET `/models` → `filterTtsModels` 筛语音类模型列成点选 chips；筛不出则列全部并提示点选后试听验证。官方档另有「获取音色」按钮 → `fetchElevenVoices()`（同样必须 IO 线程）→ `ElevenTts.fetchVoices()` GET `/voices` → 官方音色列成点选 chips（21 个，label 如「Roger·男声」）。
+2. 设置页「朗读」卡片「试听当前引擎」按钮（`ui/SettingsScreen.kt`）→ `togglePreview()` 用固定句子调 `previewTts.speak(..., ttsEngine.value, cloudConfig(), fallback = engine != CLOUD)`（`cloudConfig` 从设置页当前填写值按服务档位组装：公益站档取双 Key/音色 + 内置地址与模型，官方档取 ElevenLabs Key/音色/模型三态 + 内置地址，自定义档取地址/Key/音色/模型四件套）；`previewTts` 也是 `by lazy`，`onMessage` 写入设置页自己的 `message` Snackbar 通道。**试听传 `fallback=false`**：在线试听失败只弹准确原因，不静默换成离线/系统声音——试听的目的就是验证在线通不通。自定义档另有「检索模型」按钮 → `fetchTtsModels()`（必须 `withContext(Dispatchers.IO)`，见坑 13）→ `CloudTts.fetchModels()` GET `/models` → `filterTtsModels` 筛语音类模型列成点选 chips；筛不出则列全部并提示点选后试听验证。官方档另有「获取音色」按钮 → `fetchElevenVoices()`（同样必须 IO 线程）→ `ElevenTts.fetchVoices()` GET `/voices` → 官方音色列成点选 chips（21 个，label 如「Roger·男声」）。公益站档没有列表接口（见坑 18），音色全手填。
 
 **怎么处理**：`TtsPlayer.speak(text, rate, engine, cloud = null)`（`tts/TtsPlayer.kt:64-95`）第一句先 `stop()` 清场、`liveRate = rate`，再按 `engine` 字符串分发（常量取 `data/SettingsRepository.kt:25-29` 的 `TtsEngine.SYSTEM="system"` / `LOCAL="local"` / `CLOUD="cloud"`）：
 
-- **在线引擎分支**（`TtsPlayer.kt:69-80`）：配置为空或 Key 空白 → 提示「还没配置在线朗读：到设置页「朗读」里填…API Key」（按档位区分文案：官方档点名 ElevenLabs）；否则 `speakCloud(text, cfg, fallback)`（`:358-452`），开头按 `cfg.provider` 选客户端：`TtsCloudProvider.ELEVEN` → `ElevenTts(cfg)`，其余 → `CloudTts(cfg)`——两者都实现 `CloudTtsClient` 接口（唯一方法 `streamPcm(text, speed, onPcm)`），播放骨架（AudioTrack 约 10 秒缓冲、逐句请求、`liveRate` 每句重读）对两档完全共用。
+- **在线引擎分支**（`TtsPlayer.kt`）：两把 Key 全空白（公益站档）或 Key 空白（其余档）→ 提示「还没配置在线朗读：到设置页「朗读」里填…API Key」（按档位区分文案：公益站/官方/自定义）；否则 `speakCloud(text, cfg, fallback)`，开头按 `cfg.provider` 选客户端：`TtsCloudProvider.LATENT` → `LatentTts(cfg)`、`ELEVEN` → `ElevenTts(cfg)`，其余 → `CloudTts(cfg)`——三者都实现 `CloudTtsClient` 接口（`streamPcm(text, speed, onPcm)` + `deliversWholeChunks`），播放骨架（AudioTrack 约 10 秒缓冲、逐句请求、`liveRate` 每句重读）对三档共用。
+  - **预取流水线（2026-11-07 新增，仅整段型客户端）**：`CloudTtsClient.deliversWholeChunks=true`（目前只有 `LatentTts`）时走新循环——拿到第 N 句 PCM 后立刻 `async` 后台请求第 N+1 句，再阻塞写第 N 句进 AudioTrack（写入耗时 ≈ 该句播放时长 ≈10 秒），写完 `await` 第 N+1 句——此时它已生成了 10 秒，句间零等待；公益站双 Key 正好一句一把（客户端内部按请求序号奇偶轮换），单号限流被摊薄。预取协程失败不炸整篇：catch 后返回 null，`await` 得 null 回退同步请求当前句；同步也失败才走整体回落。流式客户端（`CloudTts`/`ElevenTts`）保持原串行「边下边播」循环不动。
   - `speakCloud` 与 `speakLocal` 同构：`playing.set(true)` 后建 `AudioTrack`（PCM 16bit 单声道、采样率 `CloudTts.SAMPLE_RATE=24000`，**缓冲约 10 秒**（`sampleRate*2*10`）——一句写完时缓冲里还压着没播的量，足够盖住下一句的网络往返，句间不出缝），然后逐句循环：`splitForSpeech(text, maxChars=120)` 切块，每句 `client.streamPcm(chunk, liveRate) { pcm -> ... }` 回调里把 PCM16 直接 `AudioTrack.write(..., WRITE_BLOCKING)`——写多快播多快；回调返回 `playing.get()`，停止时返回 false 让客户端立刻断流。每句请求前读一次 `liveRate`，朗读中拖调速条下一句生效。**服务端给的采样率不一定是 24k**——`CloudTts` 层重采样到统一 24k 后才回调，播放层不用关心。
   - 收尾同离线：等 `playbackHeadPosition` 追上 `totalFrames`。停止路径 `stop()` 除了置 `playing=false`、取消 job，还会 `track?.pause()+flush()` 立刻掐声——在线路径缓冲了 10 秒音频，不主动掐会继续出声好一会儿。
   - **失败回落**：`fallback=true`（朗读正文）时 `CloudTtsException` 等异常不终止朗读——优先退离线引擎（`ModelManager.isTtsReady` → `speakLocal`），没有就退系统语音（`speakSystemOrQueue`），都没有才罢休；`onMessage` 一次性说明「在线朗读失败：<原因>，本次先用离线/系统语音」。`fallback=false`（设置页试听）只弹「在线朗读失败：<原因>」并收掉播放态，绝不静默换声音。`stop()` 撞上收尾轮询的 `CancellationException` 属正常停止，静默返回。
   - `ElevenTts`（`tts/ElevenTts.kt`，185 行，2026-10-24 新增）：**ElevenLabs 官方 API 专属客户端**——官方协议与 OpenAI 兼容格式完全不同：音色 ID 在 URL 路径里（`POST /v1/text-to-speech/{voice_id}?output_format=pcm_24000`）、鉴权头是 `xi-api-key`（transport 接口加 `authHeaderName` 参数区分，`Authorization` 缺省仍按 Bearer 拼）、请求体是 `{"text", "model_id", "voice_settings":{"speed"}}`。输出固定 `pcm_24000`（16bit 小端单声道 24k）与播放层统一采样率一致，无重采样、无 WAV 回退（官方对格式从不拒收）。语速经 `voice_settings.speed` 传官方（限 0.7~1.2，超范围 400），**必须先夹取再量化到百分位**（`Math.round(speed*100)/100.0`）——Float 直接 `toDouble()` 会序列化出 `1.2000000476837158` 长尾被官方 400 拒（实测踩中，见坑 16）。`fetchVoices()` GET `/v1/voices` 拉官方音色列表（`parseVoices` 用 kotlinx.serialization 手动遍历，取 voice_id/name/labels.gender，name 截破折号前短名做 chips 标签如「Roger·男声」）；错误映射 401/403→Key、402→额度用尽、429→限流，其余带服务端 message。日志 tag `ElevenTts`。
+  - `LatentTts`（`tts/LatentTts.kt`，2026-11-07 新增）：**公益站 Latent Audio（audio.latent.moe）专属客户端**。站点协议是「OpenAI 形似」但多处不同：模型参数收下即忽略（内置 `latent-audio`）；**无 speed 参数**（语速滑条对此档无效）；**没有 /models、/voices 列表接口**——音色是网站语音库里已发布语音的地址（slug 或 uuid），用户手填；每号并发 4 路、每周配额 14400 秒（4 小时），429 按 body 里的 `code` 字段区分 `concurrent_limit`（并发满）/`quota_exhausted`（配额尽），文档明确要求按 code 而非 message 分支。请求策略：**整段 WAV**（站点不支持流式 PCM；`{"model","voice","input","response_format":"wav"}` + 每请求新 `Idempotency-Key` 头——同键重试会返回首次结果，我们的重试都是明确失败后的新请求，键必须换新），`CloudTtsAudio.parseWav` 解析、非 24k 重采样。**双 Key 轮换**：客户端内部 `AtomicLong` 计数器按请求序号在 `cfg.key`/`cfg.key2` 间奇偶交替（两句一轮），撞 429/503 换另一把 Key 立即重试一次（`CloudTtsException.switchKey` 标记值得换的错误）；单 Key 降级可用，两把全空发起前就报错。**504 收取**：生成等待约 1 分钟后站点回 504 + body 带 `job_id`，转 `GET /api/jobs/{id}/audio` 收成品 WAV，收不到明说「任务还没完成，稍后再试朗读本段」。错误映射：401→Key 无效/过期（30 天有效）、404→音色不存在或未发布（提示去语音库确认）、503→队列满、502→服务端失败。日志 tag `LatentTts`（Key 只打序号 Key#1/Key#2 不打值）。
   - `CloudTts`（`tts/CloudTts.kt`，396 行）：**OpenAI `/audio/speech` 兼容通用客户端（自定义档），不绑定渠道**。`apiBase()`（`:117`）规范化手填地址（补协议、剥掉多余的 `/audio/speech`、补 `/v1`），派生 `endpoint()`（`= apiBase()+"/audio/speech"`）与 `modelsEndpoint()`（`= apiBase()+"/models"`）。合成走两级格式：`streamPcm`（`:134`）先发流式 PCM（`response_format=pcm + sample_rate=24000 + stream=true`，HTTP chunked 16bit 小端边下边播）；被渠道拒收（**400/404/415/422**，或 200 却回了 JSON/HTML/文本——按 Content-Type 与首字节 `{` 识别，绝不把文本当音频喂喇叭）时自动改发极简 WAV 请求 `{model, input, voice, response_format:"wav", speed}`（`streamWav :195`，OpenAI 官方与中转站支持面最广），`CloudTtsAudio.parseWav` 解 RIFF 头（立体声降混），非 24k 线性重采样回 24k 再回调。401/403/429/断网不重试（换格式也没用）。音色由 `buildVoice(model, voice)`（`:78`）请求期拼装：短名 `anna` + 硅基式模型（含 `/`）→ 拼 `模型:anna`；挂着旧模型前缀 → 换成当前模型；OpenAI 式原名 `alloy` → 原样发。`fetchModels()`（`:223`）GET `/models` 解析 `data[].id`（正则容错），404 提示渠道不提供列表可手填。`filterTtsModels`（`:97`）先排除（whisper/embed/rerank/image/video 等）再按关键词命中（tts/speech/voice/audio/cosyvoice/fish/kokoro 等），宁滥勿缺。预置音色 `voicePresetsFor(model)`（`:62`）：CosyVoice 系 → 8 个中文标签音色；`tts-1/tts-1-hd` → OpenAI 6 音色；`gpt-4o-mini-tts` → 11 个；其他模型空表（UI 自由手填）。日志 tag `CloudTts`：请求 URL/模型/音色/格式、HTTP 码、收到字节数、失败原因。HTTP 接缝 `CloudTtsTransport`（post+get，均可指定鉴权头名）：生产 `OkHttpCloudTtsTransport`（post 成功路径不 close 流，整段朗读期间慢慢读）、单测注入 `FakeCloudTtsStream`。流式 PCM 读流与跨块解码抽成 `CloudTtsAudio.drainPcmStream`（`CloudTtsAudio.kt:24`，8KB 一读、奇数字节进位，返回总字节数/-1 表停止），两档客户端共用。
   - `CloudTtsAudio`（`tts/CloudTtsAudio.kt`，110 行）：纯函数集——`parseWav`（RIFF/fmt/data 解析，16bit 限定、立体声降混）、`resample`（线性插值重采样）、`decodePcmLe`（小端解码）。
 - **离线引擎分支**（`TtsPlayer.kt:76-84`）：先 `ModelManager.isTtsReady(appCtx)` 判 kokoro 全部 373 个文件是否就绪。就绪 → `speakLocal(text)`（`:263-345`）；未就绪 → 退回系统引擎并提示「离线朗读模型还没下载，这次先用系统语音；可在设置里下载（约 215MB）」。
@@ -37,29 +39,32 @@
 
 | 相对路径 | 行数 | 一句话职责 |
 | --- | --- | --- |
-| `app/src/main/java/com/tingsiwei/app/tts/TtsPlayer.kt` | 501 | 朗读门面：三引擎分发、在线档位分发（provider→ElevenTts/CloudTts）、流式播放与失败回落（`fallback` 参数区分试听/正文）、系统引擎初始化兜底与逐块投喂、离线引擎 AudioTrack 播放（约 5 秒缓冲领先量）、运行中调速、按句切块 `splitForSpeech`、`LocalTtsEngine` 进程级单例 |
+| `app/src/main/java/com/tingsiwei/app/tts/TtsPlayer.kt` | 550 | 朗读门面：三引擎分发、在线档位分发（provider→LatentTts/ElevenTts/CloudTts）、流式播放与失败回落（`fallback` 参数区分试听/正文）、整段型客户端的句间预取流水线、系统引擎初始化兜底与逐块投喂、离线引擎 AudioTrack 播放（约 5 秒缓冲领先量）、运行中调速、按句切块 `splitForSpeech`、`LocalTtsEngine` 进程级单例 |
+| `app/src/main/java/com/tingsiwei/app/tts/LatentTts.kt` | 188 | 公益站 Latent Audio 档客户端：双 Key 句间轮换 + 撞限流换 Key 重试、整段 WAV + 重采样、每请求新 Idempotency-Key、504 转 job 收取、按 code 字段错误映射成人话 |
 | `app/src/main/java/com/tingsiwei/app/tts/ElevenTts.kt` | 185 | ElevenLabs 官方档客户端：`/text-to-speech/{voice_id}` + `xi-api-key` 鉴权 + pcm_24000 流式、语速量化传参（0.7~1.2 夹取去 Float 长尾）、`fetchVoices` 官方音色列表解析、错误映射成人话 |
-| `app/src/main/java/com/tingsiwei/app/tts/CloudTts.kt` | 396 | 自定义档通用客户端（OpenAI 兼容）：两级格式（流式 PCM → WAV 回退）、音色请求期拼装 `buildVoice`、模型列表 `fetchModels`+`filterTtsModels`、按模型预置音色、地址规范化、错误映射成人话、`CloudTtsClient`/`CloudTtsTransport` 接口与 `CloudTtsConfig`（含 `fromSettings` 工厂）也在此文件 |
-| `app/src/main/java/com/tingsiwei/app/tts/CloudTtsAudio.kt` | 133 | 音频纯函数：`drainPcmStream`（两档共用的流式 PCM 读流+跨块解码）、WAV（RIFF）解析、线性插值重采样、小端 PCM 解码 |
+| `app/src/main/java/com/tingsiwei/app/tts/CloudTts.kt` | 432 | 自定义档通用客户端（OpenAI 兼容）：两级格式（流式 PCM → WAV 回退）、音色请求期拼装 `buildVoice`、模型列表 `fetchModels`+`filterTtsModels`、按模型预置音色、地址规范化、错误映射成人话、`CloudTtsClient`/`CloudTtsTransport` 接口（含 `extraHeaders`/`durationMs` 接缝）与 `CloudTtsConfig`（含 `key2` 双 Key 字段与 `fromSettings` 工厂）也在此文件 |
+| `app/src/main/java/com/tingsiwei/app/tts/CloudTtsAudio.kt` | 133 | 音频纯函数：`drainPcmStream`（流式 PCM 读流+跨块解码）、WAV（RIFF）解析、线性插值重采样、小端 PCM 解码 |
 | `app/src/main/java/com/tingsiwei/app/tts/SherpaTts.kt` | 51 | kokoro 离线引擎配置封装（`OfflineTtsConfig` 组装 + `VOICE_ID` 常量） |
 | `app/src/main/java/com/tingsiwei/app/tts/TtsChunkCallback.java` | 27 | JNI 签名精确匹配的合成回调（Java 实现，Kotlin lambda 会 abort） |
-| `app/src/test/java/com/tingsiwei/app/ElevenTtsTest.kt` | 242 | `ElevenTts`/`fromSettings` 10 例：URL/请求体/鉴权头拼装、语速夹取与序列化无长尾、未配置报错不发请求、401/402/429/422 错误映射、PCM 跨块解码与提前停止、空响应/JSON 响应不喂喇叭、音色列表解析、`fetchVoices` 走 GET+xi-api-key |
-| `app/src/test/java/com/tingsiwei/app/CloudTtsTest.kt` | 376 | `CloudTts`/`CloudTtsAudio` 21 例：地址规范化、请求体、PCM 跨块解码、错误映射、音色拼装与预置、WAV 回退链（400→WAV、200+JSON→WAV、双 JSON 报错、401 不重试）、WAV 解析与重采样、空响应报错、模型检索解析与筛选 |
+| `app/src/test/java/com/tingsiwei/app/LatentTtsTest.kt` | 277 | `LatentTts` 16 例：请求拼装（内置端点/wav 格式/幂等键/无 speed）、双 Key 句间轮换、单 Key 降级、双 Key 全空/无音色报错不发请求、429 换 Key 重试成功与双双限流报人话、401/404/503 映射、504 转 job 收取与收取失败、WAV 解析与 48k→24k 重采样、`fromSettings` 公益站分支、`deliversWholeChunks` |
+| `app/src/test/java/com/tingsiwei/app/ElevenTtsTest.kt` | 261 | `ElevenTts`/`fromSettings` 10 例：URL/请求体/鉴权头拼装、语速夹取与序列化无长尾、未配置报错不发请求、401/402/429/422 错误映射、PCM 跨块解码与提前停止、空响应/JSON 响应不喂喇叭、音色列表解析、`fetchVoices` 走 GET+xi-api-key、`fromSettings` 三档组装（默认公益站） |
+| `app/src/test/java/com/tingsiwei/app/CloudTtsTest.kt` | 382 | `CloudTts`/`CloudTtsAudio` 20 例：地址规范化、请求体、PCM 跨块解码、错误映射、音色拼装与预置、WAV 回退链（400→WAV、200+JSON→WAV、双 JSON 报错、401 不重试）、WAV 解析与重采样、空响应报错、模型检索解析与筛选 |
 | `app/src/test/java/com/tingsiwei/app/TtsSplitTest.kt` | 46 | `splitForSpeech` 4 例：短文不分块、句末切块不超上限、无句读硬切不丢字、小块切分 |
 
 ## 对外接口 / 被谁调用
 
 - `TtsPlayer(context, onMessage)`：全工程两个构造点——`DetailScreen.kt`（朗读思路）与 `SettingsScreen.kt`（试听），都传了 `onMessage`。
-- `speak(text, rate, engine, cloud = null, fallback = true)`（`TtsPlayer.kt:69`）← `DetailScreen.toggleTtsText`（cloud 引擎时传 `CloudTtsConfig.fromSettings(s)` 组装的配置，正文 fallback 默认 true）、`SettingsScreen.togglePreview`（试听，`cloudConfig()` 按界面值按档位组装，cloud 引擎时传 `fallback=false`）。
-- `updateRate(rate)`（`TtsPlayer.kt:97`）← 详情页与设置页朗读中拖语速条；对在线引擎无额外动作——`liveRate` 每句请求前重读，下一句自然生效。
-- `stop()`（`TtsPlayer.kt:109`）← 两个调用点；`track?.pause()+flush()` 立刻掐声。
-- `shutdown()`（`TtsPlayer.kt:126`）← 详情页与设置页的 `onCleared`（设置页 2026-10-31 起接入，修试听引擎泄漏）。
+- `speak(text, rate, engine, cloud = null, fallback = true)`（`TtsPlayer.kt:71`）← `DetailScreen.toggleTtsText`（cloud 引擎时传 `CloudTtsConfig.fromSettings(s)` 组装的配置，正文 fallback 默认 true）、`SettingsScreen.togglePreview`（试听，`cloudConfig()` 按界面值按档位组装，cloud 引擎时传 `fallback=false`）。
+- `updateRate(rate)`（`TtsPlayer.kt:99`）← 详情页与设置页朗读中拖语速条；对在线引擎无额外动作——`liveRate` 每句请求前重读，下一句自然生效。
+- `stop()`（`TtsPlayer.kt:116`）← 两个调用点；`track?.pause()+flush()` 立刻掐声。
+- `shutdown()`（`TtsPlayer.kt:133`）← 详情页与设置页的 `onCleared`（设置页 2026-10-31 起接入，修试听引擎泄漏）。
 - `val isSpeaking`（`:59`）。`var onStateChange` **已于 2026-10-31 移除**——全项目从未有赋值点，14 处内部 invoke 全是空转，宿主都用 300ms 轮询 `isSpeaking`。
-- `LocalTtsEngine.obtain/release`：`release` 自 2026-10-31 起有真实调用方——设置页 `deleteTtsModel()` 删完文件后放掉常驻引擎（此前 release 全项目零调用，「删了模型内存里还压着 114MB 且还能读」）；`internal fun splitForSpeech`（`TtsPlayer.kt:475`，`TtsSplitTest` 直接测；生产三处调用都传 120）。
-- `CloudTtsClient` 接口（`streamPcm(text, speed, onPcm)`，`CloudTts.kt`）：`CloudTts` 与 `ElevenTts` 都实现它，`TtsPlayer.speakCloud` 只依赖接口按 `cfg.provider` 分发（`TtsCloudProvider.ELEVEN` → ElevenTts，其余 → CloudTts）。
+- `LocalTtsEngine.obtain/release`：`release` 自 2026-10-31 起有真实调用方——设置页 `deleteTtsModel()` 删完文件后放掉常驻引擎（此前 release 全项目零调用，「删了模型内存里还压着 114MB 且还能读」）；`internal fun splitForSpeech`（`TtsPlayer.kt:519`，`TtsSplitTest` 直接测；生产三处调用都传 120）。
+- `CloudTtsClient` 接口（`streamPcm(text, speed, onPcm)` + `deliversWholeChunks`，`CloudTts.kt`）：`CloudTts`、`ElevenTts`、`LatentTts` 都实现它，`TtsPlayer.speakCloud` 只依赖接口按 `cfg.provider` 分发（`LATENT` → LatentTts，`ELEVEN` → ElevenTts，其余 → CloudTts）；`deliversWholeChunks=true` 时 TtsPlayer 走预取流水线循环。
 - `ElevenTts(cfg)` / `streamPcm` 仅 `TtsPlayer.speakCloud` 使用；`fetchVoices()` / `parseVoices` / `MODELS`（3 个官方模型中文标签）被设置页 UI 用（「获取音色」chips、模型 chips）。
 - `CloudTts(cfg)` / `streamPcm` 仅 `TtsPlayer.speakCloud` 使用；`fetchModels()` / `filterTtsModels` / `voicePresetsFor` / `buildVoice` / `voiceLabel` 被设置页 UI 用（检索模型、音色预置 chips、模型/音色拼装）。
-- `CloudTtsConfig.fromSettings(s)`（`CloudTts.kt` 伴生工厂）← `DetailScreen.toggleTtsText`；按服务档位取对应一组键（官方档内置地址 + `ttsElevenKey/Voice/Model`，自定义档 `ttsCloudUrl/Key/Voice/Model`）。
+- `LatentTts(cfg)` / `streamPcm` 仅 `TtsPlayer.speakCloud` 使用；无列表接口故无 fetch* 方法。
+- `CloudTtsConfig.fromSettings(s)`（`CloudTts.kt` 伴生工厂）← `DetailScreen.toggleTtsText`；按服务档位取对应一组键（公益站档内置地址/模型 + `ttsLatentKey1/Key2/Voice`，官方档内置地址 + `ttsElevenKey/Voice/Model`，自定义档 `ttsCloudUrl/Key/Voice/Model`）。
 
 ## 依赖的上游模块
 
@@ -78,20 +83,20 @@
 | `track: AudioTrack?` | `TtsPlayer.kt:50` | 当前播放轨道，`stop()` 用来 `pause+flush` 立刻掐声（在线路径缓冲大，必须掐） |
 | `systemChunks` / `systemNext` / `pendingSystemText` | `TtsPlayer.kt:42-48` | 系统引擎切块队列、游标与初始化期暂存 |
 | `LocalTtsEngine.instance` | `TtsPlayer.kt:437` | 进程级 kokoro 单例 |
-| `CloudTtsConfig(baseUrl, key, voice, model, provider)` | `CloudTts.kt` | 在线朗读配置；provider=`eleven`（官方档，voice 存官方音色 ID）/`custom`（自定义档，默认）；`fromSettings(s)` 是标准组装点 |
-| `CloudTtsClient` | `CloudTts.kt` | 两档在线客户端的统一播放接口（唯一方法 `streamPcm`），TtsPlayer 只依赖它 |
+| `CloudTtsConfig(baseUrl, key, voice, model, provider, key2)` | `CloudTts.kt` | 在线朗读配置；provider=`latent`（公益站档，默认）/`eleven`（官方档，voice 存官方音色 ID）/`custom`（自定义档）；`key2` 是公益站第二把 Key（其余档留空）；`fromSettings(s)` 是标准组装点 |
+| `CloudTtsClient` | `CloudTts.kt` | 三档在线客户端的统一播放接口（`streamPcm` + `deliversWholeChunks`），TtsPlayer 只依赖它 |
 | `ElevenTts.MODELS` / `ElevenVoice` | `ElevenTts.kt` | 官方模型 3 个（multilingual_v2 效果最好/turbo_v2_5 均衡/flash_v2_5 最快）；`ElevenVoice(id,name,gender,…)` 是音色列表项，label 如「Roger·男声」 |
 | `CloudTts.VOICES` | `CloudTts.kt:36` | 硅基流动 8 预置音色（接口后缀名 ↔ 中文标签） |
 | `buildVoice(model, voice)` | `CloudTts.kt:74` | 音色请求期拼装：短名补模型前缀 / 旧前缀替换 / OpenAI 式原样 |
 | 两级格式与重试码 | `CloudTts.kt:130-217` | pcm-stream → 400/404/415/422 或 200+文本 → 极简 WAV；解析重采样后回调 |
 | chunked PCM 解码 | `CloudTts.kt` + `CloudTtsAudio.decodePcmLe` | 8KB 块读入 + 奇数字节 `carry` 进位 + 小端拼 ShortArray |
-| `splitForSpeech` 块规则 | `TtsPlayer.kt:475` | 句末边界切分、每块 ≤120 字；三引擎统一 120 |
+| `splitForSpeech` 块规则 | `TtsPlayer.kt:519` | 句末边界切分、每块 ≤120 字；三引擎统一 120 |
 
 ## 已知坑与约束
 
-1. **在线朗读必须有网、必须填 Key**：没填 Key 在发起前就提示；请求失败（断网/Key 错/限流）不空手——自动退回离线/系统引擎读完本次并弹原因（`TtsPlayer.kt:417-428`）。回落选择发生在失败当下，若离线模型没下载则直接落系统语音。
+1. **在线朗读必须有网、必须填 Key**：没填 Key 在发起前就提示；请求失败（断网/Key 错/限流）不空手——自动退回离线/系统引擎读完本次并弹原因（`TtsPlayer.kt:445-456`）。回落选择发生在失败当下，若离线模型没下载则直接落系统语音。
 2. **句间连续性靠播放缓冲的领先量，不是并发预取**：两个流式引擎都是逐句串行合成/请求（不并发开第二个任务——离线引擎是 native 单例不能并行，在线路径 10 秒缓冲足够），靠 AudioTrack 大缓冲吸收句间空档。离线路径约 5 秒缓冲（2026-10-24 起）：合成背靠背跑进缓冲，领先量 ≈1~2 句盖住每句启动耗时。边界：①设备算力不足、合成慢于实时播放时领先量攒不起来，句间/句中仍会断，后备手段依次是 `SherpaTts` 构造参数 `numThreads` 2→4、实验调 `maxNumSentences`、改用在线引擎；②全文第一句的冷启动（首趟推理几百毫秒到 1 秒）没有领先量可盖，消不掉；③调速生效最多延后约 5 秒（旧语速已压进缓冲的量，此前是当前句放完即生效）。在线路径网络极慢（>10 秒拿不到下一句首包）时句间会有短暂停顿；语速 2x 时缓冲等效时长减半。
-3. **「停」的即时性**：`stop()` 里 `pause+flush` 立刻掐声（`:110-114`）；被停协程可能还挂在 socket read 上（readTimeout 30 秒），最多滞留一个读超时后自行退出，期间不再出声、无副作用。
+3. **「停」的即时性**：`stop()` 里 `pause+flush` 立刻掐声（`:116-120`）；被停协程可能还挂在 socket read 上（readTimeout 30 秒），最多滞留一个读超时后自行退出，期间不再出声、无副作用。
 4. **在线朗读走手机流量**：计费按输入文本 UTF-8 字节数；CosyVoice2 在硅基流动模型页当前标价免费（以官网实时价格为准）。一篇 5000 字笔记约 25 次请求（每次一句 ≤120 字）。
 5. **`isSpeaking` 轮询竞态（继承）**：系统引擎走「创建中」路径时 `playing` 要等初始化回调才置 true，首轮检查可能提前退出循环；离线与在线路径 `playing` 在进入合成前就置 true，无此问题。
 6. **无音频焦点（继承）**：朗读与详情页录音回放、录音链路互不知情，可同时出声。
@@ -106,8 +111,12 @@
 15. **硅基流动免费档 CosyVoice2 高峰排队挂起，MOSS-TTSD 即时可用**（2026-10-24 用老板 Key 实测）：CosyVoice2-0.5B 合成请求任何格式都无响应直到超时（无效 Key 秒回 401 → 端点与鉴权都没问题，是服务端免费模型排队）；同 Key 下 `fnlp/MOSS-TTSD-v0.5` 用 App 首选格式 pcm+stream 即时返回真实音频，**模拟器 App 内全链路试听成功**（选 MOSS chip + 音色手填 `alex`，logcat `流式 PCM 完成：258816 字节`）。MOSS 无预置音色（坑 11 的「其他模型空表」分支），音色手填英文短名即可。CosyVoice2 可错峰重试，排队恢复即用。
 16. **ElevenLabs 语速参数不容忍 Float 长尾（2026-10-24 模拟器实测踩中）**：官方严格校验 `voice_settings.speed ∈ [0.7, 1.2]`，且不做浮点容差——Kotlin `1.2f.toDouble()` 是 `1.2000000476837158`，直接序列化被官方 400 拒（`Invalid setting for speed received… received 1.2000000476837158`）。修法：`Math.round(speed.coerceIn(0.7f,1.2f)*100f)/100.0` 量化到百分位，序列化即干净的 `1.2`；`ElevenTtsTest` 有断言钉住「序列化文本不得带长尾」。新加任何给官方传 float 的字段都要过同一道量化。
 17. **官方档与自定义档是两套协议、两套配置，互不覆盖**：ElevenLabs 音色 ID 在 URL 路径、鉴权头 `xi-api-key`、请求体 `{"text","model_id"}`，与 OpenAI 兼容格式（音色在 body、Bearer 鉴权）完全不同，所以不能共用一个客户端；`CloudTtsTransport` 接口为此加了 `authHeaderName` 参数（`Authorization` 缺省按 Bearer 拼，其他头名用 key 原值）。两档各存各的键（官方 `tts_eleven_key/voice/model`，自定义 `tts_cloud_url/key/voice/model`），切换档位不丢配置。官方免费档每月 10000 字符（约读两三篇 3000 字笔记），额度用尽时官方回 401（带 quota_exceeded），App 报「请检查 API Key（免费额度用尽也会这样）」——不是 Key 填错。官方音色列表（GET /voices 免费可用）拉到 21 个 premade 音色，都能读中文。
+18. **公益站 Latent 的协议怪点与配额（2026-11-07 适配）**：①音色**没有列表接口**（/models、/voices 全 404），只能登录 audio.latent.moe 在语音库（Library）里挑已发布的语音、复制它的地址（slug）填进设置——文档示例 voice `aria` 已失效（实测 404 "No such voice, or it is not published"）；②**无 speed 参数**，语速滑条对此档无效（设置页 hint 已说明）；③每号**并发 4 路、每周配额 14400 秒**（约 4 小时，滚动周按毫秒计），两把 Key 轮换即 8 小时/周；④单请求 ≤300 秒估算时长；⑤请求最多等约 1 分钟，超时回 **504 + job_id**，转 GET 收取（App 已实现）；⑥站点在 Cloudflare 后面且境外，国内直连波动大（桌面端探测时 IPv6 完全不通、IPv4 时通时断；curl 需 `-4` 强制 IPv4），App 内报「连不上公益站」时重试即可；⑦站点要求 Discord 验证的会员身份才能登录，Key 30 天有效、登录续期。**中文语音的实际音色与听感未验证（UNMEASURED）**——要老板从语音库挑中文语音填入后试听。
+19. **预取流水线的边界**：仅 `deliversWholeChunks=true` 的客户端（当前只有 LatentTts）走预取；预取一句 PCM 驻留内存约 0.5MB（120 字 @24k 16bit），可忽略；预取失败静默降级为同步请求（不炸整篇），同步再失败走整体回落离线/系统。stop() 取消主协程时预取协程一并取消，无泄漏。调速（liveRate）对公益站无效（站点无 speed 参数），对其余两档照旧每句生效。
 
 ## 最后更新
+
+2026-11-07 · 新增在线朗读第三档「公益站 Latent」（默认档）：`LatentTts.kt`（188 行）——audio.latent.moe 中文公益站专属客户端，**双 Key 句间轮换**（`CloudTtsConfig` 加 `key2`，客户端内 `AtomicLong` 奇偶交替）+ **撞 429/503 换另一把 Key 重试**（`CloudTtsException.switchKey`）+ **句间预取流水线**（`CloudTtsClient` 加 `deliversWholeChunks`，TtsPlayer 播放第 N 句时 async 预取第 N+1 句，预取失败降级同步请求；流式两档保持原串行循环）；整段 WAV（`response_format:"wav"`，站点无流式/无 speed）+ 每请求新 `Idempotency-Key`；504 + job_id 转 GET 收取；错误按站点 code 字段映射（concurrent_limit/quota_exhausted/queue_full…）。数据层 `TtsCloudProvider.LATENT` + `tts_latent_key1/key2/voice` 三键 + `TtsLatentDefaults`（地址/模型内置），**默认档位 ELEVEN→LATENT**（存量安装保留已选档位）；设置页三档切换 + 公益站两个 Key 与音色输入框（音色须登录站点语音库手填，无列表接口，坑 18）。`CloudTtsTransport` 接口加 `extraHeaders`/`durationMs` 接缝（向后兼容默认参数）。**261 例单测全过**（LatentTtsTest 16 例新增；ElevenTtsTest 的 fromSettings 用例更新为三档断言），`assembleDebug` 成功。桌面端 curl 实测：站点 IPv6 完全不通、IPv4 时通时断，文档示例 voice `aria` 已失效（404 "No such voice"）；App 内全链路试听与中文听感**待老板从语音库挑中文音色后验收（UNMEASURED）**。
 
 2026-10-31 · 健康修复批（逻辑面三处小改）：①**移除死回调 `onStateChange`**——全项目从无赋值点、内部 14 处 invoke 全空转，删除字段与全部 invoke（`playing.set(false)` 等状态转换保留）；②**设置页试听引擎泄漏修复**——`SettingsViewModel` 新增 `onCleared()` 调 `previewTts.shutdown()`（此前每进出设置页泄漏一份系统 TTS 实例与内部协程），`shutdown()` 的调用方从「仅详情页」变为「详情页 + 设置页」；③**`LocalTtsEngine.release()` 有了真实调用方**——设置页删 TTS 模型后放掉常驻引擎（此前 release 全项目零调用，删文件不腾内存）。`OkHttpCloudTtsTransport` 的客户端改从 `util.Http.base` newBuilder 派生（连接池与 LLM/下载共用，超时不变：connect 15s / read 30s）。文件 501→492 行。
 

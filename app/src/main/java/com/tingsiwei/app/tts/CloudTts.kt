@@ -4,6 +4,7 @@ import android.util.Log
 import com.tingsiwei.app.data.TtsCloudProvider
 import com.tingsiwei.app.util.Http
 import com.tingsiwei.app.data.TtsElevenDefaults
+import com.tingsiwei.app.data.TtsLatentDefaults
 import com.tingsiwei.app.data.TtsEngine
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -110,8 +111,13 @@ class CloudTts(
         }
     }
 
-    /** message 一律是给用户看的中文，调用方直接展示；retryWithWav 标记该错误值得换 WAV 格式重试一次 */
-    class CloudTtsException(message: String, internal val retryWithWav: Boolean = false) : RuntimeException(message)
+    /** message 一律是给用户看的中文，调用方直接展示；retryWithWav 标记该错误值得换 WAV 格式重试一次；
+     *  switchKey 标记该错误（限流/额度尽/队列满）值得换另一把 Key 重试一次（公益站双号轮换用） */
+    class CloudTtsException(
+        message: String,
+        internal val retryWithWav: Boolean = false,
+        internal val switchKey: Boolean = false,
+    ) : RuntimeException(message)
 
     /** 地址规范化：http(s)://开头、以 /v1 结尾的接口根（补协议与 /v1，完整路径会剥回根） */
     fun apiBase(): String {
@@ -288,8 +294,11 @@ class CloudTts(
         }
 }
 
-/** 在线朗读客户端的统一播放接口：TtsPlayer 只依赖它做流式朗读，具体协议在 [CloudTts]（OpenAI 兼容）与 [ElevenTts]（官方） */
+/** 在线朗读客户端的统一播放接口：TtsPlayer 只依赖它做流式朗读，具体协议在 [CloudTts]（OpenAI 兼容）、[ElevenTts]（官方）与 [LatentTts]（公益站） */
 interface CloudTtsClient {
+    /** true = 每次调用整句一次回调（可安全在播放当前句时预取下一句）；流式客户端保持 false */
+    val deliversWholeChunks: Boolean get() = false
+
     fun streamPcm(text: String, speed: Float, onPcm: (ShortArray) -> Boolean)
 }
 
@@ -299,14 +308,20 @@ data class CloudTtsConfig(
     val key: String,
     val voice: String,
     val model: String = CloudTts.DEFAULT_MODEL,
-    /** 服务档位：官方 ElevenLabs（voice 存官方音色 ID）/ 自定义 OpenAI 兼容（默认，向后兼容省略传参） */
+    /** 服务档位：公益站 Latent（默认）/ 官方 ElevenLabs（voice 存官方音色 ID）/ 自定义 OpenAI 兼容 */
     val provider: String = TtsCloudProvider.CUSTOM,
+    /** 第二个 Key：公益站双账号轮换用（句间交替 + 撞限流互备）；其余档位留空 */
+    val key2: String = "",
 ) {
     companion object {
-        /** 按设置快照组装在线朗读配置；引擎没选「在线朗读」返回 null。官方档地址内置，自定义档用四件套 */
+        /** 按设置快照组装在线朗读配置；引擎没选「在线朗读」返回 null。公益站/官方档地址内置，自定义档用四件套 */
         fun fromSettings(s: com.tingsiwei.app.data.AppSettings): CloudTtsConfig? =
             when {
                 s.ttsEngine != TtsEngine.CLOUD -> null
+                s.ttsCloudProvider == TtsCloudProvider.LATENT -> CloudTtsConfig(
+                    TtsLatentDefaults.BASE_URL, s.ttsLatentKey1, s.ttsLatentVoice, TtsLatentDefaults.MODEL,
+                    TtsCloudProvider.LATENT, s.ttsLatentKey2,
+                )
                 s.ttsCloudProvider == TtsCloudProvider.ELEVEN -> CloudTtsConfig(
                     TtsElevenDefaults.BASE_URL, s.ttsElevenKey, s.ttsElevenVoice, s.ttsElevenModel, TtsCloudProvider.ELEVEN,
                 )
@@ -322,10 +337,20 @@ interface CloudTtsTransport {
         val bodyStream: InputStream?,
         val errorText: String,
         val contentType: String = "",
+        /** 服务端给的音频时长头（公益站 X-Audio-Duration-Ms，计费口径）；没有为 null */
+        val durationMs: Long? = null,
     )
 
-    /** [authHeaderName]：鉴权头名。Authorization（缺省）按 Bearer 拼；其他头名（如 ElevenLabs 的 xi-api-key）直接用 key 原值 */
-    fun post(url: String, key: String, jsonBody: String, authHeaderName: String = "Authorization"): Resp
+    /** [authHeaderName]：鉴权头名。Authorization（缺省）按 Bearer 拼；其他头名（如 ElevenLabs 的 xi-api-key）直接用 key 原值；
+     *  [extraHeaders]：附加请求头（如公益站的 Idempotency-Key） */
+    fun post(
+        url: String,
+        key: String,
+        jsonBody: String,
+        authHeaderName: String = "Authorization",
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Resp
+
     fun get(url: String, key: String, authHeaderName: String = "Authorization"): Resp
 }
 
@@ -340,17 +365,23 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    override fun post(url: String, key: String, jsonBody: String, authHeaderName: String): CloudTtsTransport.Resp {
-        val req = Request.Builder()
+    override fun post(
+        url: String,
+        key: String,
+        jsonBody: String,
+        authHeaderName: String,
+        extraHeaders: Map<String, String>,
+    ): CloudTtsTransport.Resp {
+        val builder = Request.Builder()
             .url(url)
             .header(authHeaderName, if (authHeaderName == "Authorization") "Bearer $key" else key)
-            .post(jsonBody.toRequestBody("application/json".toMediaType()))
-            .build()
+        extraHeaders.forEach { (name, value) -> builder.header(name, value) }
+        val req = builder.post(jsonBody.toRequestBody("application/json".toMediaType())).build()
         val resp = client.newCall(req).execute()
         val contentType = resp.header("Content-Type").orEmpty()
         return if (resp.isSuccessful) {
             // 成功路径不能 close：body 流要在整个朗读期间慢慢读
-            CloudTtsTransport.Resp(resp.code, resp.body?.byteStream(), "", contentType)
+            CloudTtsTransport.Resp(resp.code, resp.body?.byteStream(), "", contentType, durationMs(resp))
         } else {
             val err = try {
                 resp.body?.string().orEmpty()
@@ -360,6 +391,9 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
             CloudTtsTransport.Resp(resp.code, null, err, contentType)
         }
     }
+
+    private fun durationMs(resp: okhttp3.Response): Long? =
+        resp.header("X-Audio-Duration-Ms")?.toLongOrNull()
 
     override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
         val req = Request.Builder()

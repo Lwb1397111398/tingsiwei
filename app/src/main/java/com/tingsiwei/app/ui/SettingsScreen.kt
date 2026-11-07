@@ -77,6 +77,7 @@ import com.tingsiwei.app.data.TtsCloudDefaults
 import com.tingsiwei.app.data.TtsCloudProvider
 import com.tingsiwei.app.data.TtsElevenDefaults
 import com.tingsiwei.app.data.TtsEngine
+import com.tingsiwei.app.data.TtsLatentDefaults
 import com.tingsiwei.app.data.TranscribeMode
 import com.tingsiwei.app.llm.LlmClient
 import com.tingsiwei.app.llm.LlmPolicy
@@ -134,6 +135,9 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val ttsElevenKey by vm.ttsElevenKey.collectAsState()
     val ttsElevenVoice by vm.ttsElevenVoice.collectAsState()
     val ttsElevenModel by vm.ttsElevenModel.collectAsState()
+    val ttsLatentKey1 by vm.ttsLatentKey1.collectAsState()
+    val ttsLatentKey2 by vm.ttsLatentKey2.collectAsState()
+    val ttsLatentVoice by vm.ttsLatentVoice.collectAsState()
     val elevenVoices by vm.elevenVoices.collectAsState()
     val elevenBusy by vm.elevenBusy.collectAsState()
     val ttsModels by vm.ttsModels.collectAsState()
@@ -472,7 +476,13 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
 
                 AnimatedSection(visible = ttsEngine == TtsEngine.CLOUD) {
                     ThinDivider()
-                    // 两档：官方 ElevenLabs 只填 Key；自定义填任意 OpenAI 兼容渠道。两档配置互不覆盖
+                    // 三档：公益站 Latent（默认，双 Key 轮换）/官方 ElevenLabs 只填 Key；自定义填任意 OpenAI 兼容渠道。三档配置互不覆盖
+                    ChoiceRow(
+                        label = "公益站（中文）",
+                        description = "双 Key 轮换防限流，句间预取不断句；每号每周约 4 小时",
+                        selected = ttsCloudProvider == TtsCloudProvider.LATENT,
+                        onClick = { vm.setTtsCloudProvider(TtsCloudProvider.LATENT) },
+                    )
                     ChoiceRow(
                         label = "官方 ElevenLabs",
                         description = "内置地址，填 Key 即用；免费档每月 1 万字符",
@@ -485,6 +495,32 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         selected = ttsCloudProvider == TtsCloudProvider.CUSTOM,
                         onClick = { vm.setTtsCloudProvider(TtsCloudProvider.CUSTOM) },
                     )
+                    AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.LATENT) {
+                        SettingsField(
+                            value = ttsLatentKey1,
+                            onValueChange = { vm.setTtsLatentKey1(it) },
+                            label = "API Key ①（公益站账号 1）",
+                            placeholder = "lat_tk_…",
+                            obscure = true,
+                        )
+                        SettingsField(
+                            value = ttsLatentKey2,
+                            onValueChange = { vm.setTtsLatentKey2(it) },
+                            label = "API Key ②（账号 2，留空则只用账号 1）",
+                            placeholder = "lat_tk_…",
+                            obscure = true,
+                        )
+                        SettingsField(
+                            value = ttsLatentVoice,
+                            onValueChange = { vm.setTtsLatentVoice(it) },
+                            label = "音色（网站语音库里已发布语音的地址）",
+                            placeholder = "登录 audio.latent.moe 在 Library 复制",
+                        )
+                        SettingHint(
+                            "两句一换 Key：这句用账号 1、那句用账号 2；播放当前句时，下一句已用另一把 Key 在生成，不怕限流。\n" +
+                                "音色要在网站语音库（Library）挑已发布的语音、复制它的地址；中文语音才读得自然。语速滑条对此档无效。"
+                        )
+                    }
                     AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.ELEVEN) {
                         SettingsField(
                             value = ttsElevenKey,
@@ -533,7 +569,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         }
                         SettingHint("官方音色都能读中文；换模型或音色后点「试听」验证。")
                     }
-                    AnimatedSection(visible = ttsCloudProvider != TtsCloudProvider.ELEVEN) {
+                    AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.CUSTOM) {
                         SettingsField(
                             value = ttsCloudUrl,
                             onValueChange = { vm.setTtsCloudUrl(it) },
@@ -599,7 +635,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                 }
                 AnimatedSection(
                     visible = ttsEngine != TtsEngine.CLOUD &&
-                        (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank()),
+                        (ttsCloudKey.isNotBlank() || ttsElevenKey.isNotBlank() || ttsLatentKey1.isNotBlank() || ttsLatentKey2.isNotBlank()),
                 ) {
                     // 最常见的「填了没反应」：配置都在，引擎却没切过来
                     InlineNotice(
@@ -914,6 +950,7 @@ class SettingsViewModel : ViewModel() {
     // 三组各自独立计时，互不取消；关页时 onCleared 兜底补写一次（幂等），防抖窗口内的输入不丢。
     private var cloudPersistJob: Job? = null
     private var elevenPersistJob: Job? = null
+    private var latentPersistJob: Job? = null
     private var ratePersistJob: Job? = null
 
     val url = MutableStateFlow("")
@@ -933,6 +970,9 @@ class SettingsViewModel : ViewModel() {
     val ttsElevenKey = MutableStateFlow("")
     val ttsElevenVoice = MutableStateFlow(TtsElevenDefaults.VOICE)
     val ttsElevenModel = MutableStateFlow(TtsElevenDefaults.MODEL)
+    val ttsLatentKey1 = MutableStateFlow("")
+    val ttsLatentKey2 = MutableStateFlow("")
+    val ttsLatentVoice = MutableStateFlow(TtsLatentDefaults.VOICE)
     /** 官方档「获取音色」拉到的列表；空 = 没拉过或本次没解析到 */
     val elevenVoices = MutableStateFlow<List<ElevenTts.ElevenVoice>>(emptyList())
     val elevenBusy = MutableStateFlow(false)
@@ -971,6 +1011,9 @@ class SettingsViewModel : ViewModel() {
             ttsElevenKey.value = s.ttsElevenKey
             ttsElevenVoice.value = s.ttsElevenVoice
             ttsElevenModel.value = s.ttsElevenModel
+            ttsLatentKey1.value = s.ttsLatentKey1
+            ttsLatentKey2.value = s.ttsLatentKey2
+            ttsLatentVoice.value = s.ttsLatentVoice
             contextWindow.value = s.llmContextWindow
             minIntervalMs.value = s.llmMinIntervalMs
             conservative.value = s.llmConservative
@@ -1192,6 +1235,30 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
+    // 公益站 Latent 档：两把 Key 与音色改动即存（惯例同官方档），600ms 防抖合并
+    fun setTtsLatentKey1(k: String) {
+        ttsLatentKey1.value = k
+        persistTtsLatent()
+    }
+
+    fun setTtsLatentKey2(k: String) {
+        ttsLatentKey2.value = k
+        persistTtsLatent()
+    }
+
+    fun setTtsLatentVoice(v: String) {
+        ttsLatentVoice.value = v
+        persistTtsLatent()
+    }
+
+    private fun persistTtsLatent() {
+        latentPersistJob?.cancel()
+        latentPersistJob = viewModelScope.launch {
+            delay(600)
+            repo.setTtsLatent(ttsLatentKey1.value, ttsLatentKey2.value, ttsLatentVoice.value)
+        }
+    }
+
     /** 拉官方音色列表：先存当前填写值，再 GET /voices 列成点选 chips（网络必须 IO 线程，同「检索模型」的坑） */
     fun fetchElevenVoices() {
         if (elevenBusy.value) return
@@ -1323,6 +1390,7 @@ class SettingsViewModel : ViewModel() {
             repo.setTtsRate(ttsRate.value)
             repo.setTtsCloud(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
             repo.setTtsEleven(ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value)
+            repo.setTtsLatent(ttsLatentKey1.value, ttsLatentKey2.value, ttsLatentVoice.value)
         }
     }
 
@@ -1350,10 +1418,15 @@ class SettingsViewModel : ViewModel() {
     /** 在线引擎需要的配置从当前填写值组装（未选在线引擎时返回 null；按服务档位取对应一档的界面值） */
     private fun cloudConfig(): CloudTtsConfig? =
         if (ttsEngine.value == TtsEngine.CLOUD) {
-            if (ttsCloudProvider.value == TtsCloudProvider.ELEVEN) {
-                CloudTtsConfig(TtsElevenDefaults.BASE_URL, ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value, TtsCloudProvider.ELEVEN)
-            } else {
-                CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
+            when (ttsCloudProvider.value) {
+                TtsCloudProvider.LATENT -> CloudTtsConfig(
+                    TtsLatentDefaults.BASE_URL, ttsLatentKey1.value, ttsLatentVoice.value, TtsLatentDefaults.MODEL,
+                    TtsCloudProvider.LATENT, ttsLatentKey2.value,
+                )
+                TtsCloudProvider.ELEVEN -> CloudTtsConfig(
+                    TtsElevenDefaults.BASE_URL, ttsElevenKey.value, ttsElevenVoice.value, ttsElevenModel.value, TtsCloudProvider.ELEVEN,
+                )
+                else -> CloudTtsConfig(ttsCloudUrl.value, ttsCloudKey.value, ttsCloudVoice.value, ttsCloudModel.value)
             }
         } else null
 

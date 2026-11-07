@@ -34,7 +34,13 @@ class ElevenTtsTest {
         var getCode = 200
         var getBody = ""
 
-        override fun post(url: String, key: String, jsonBody: String, authHeaderName: String): CloudTtsTransport.Resp {
+        override fun post(
+            url: String,
+            key: String,
+            jsonBody: String,
+            authHeaderName: String,
+            extraHeaders: Map<String, String>,
+        ): CloudTtsTransport.Resp {
             urls += url
             keys += key
             authHeaders += authHeaderName
@@ -218,12 +224,25 @@ class ElevenTtsTest {
     fun `fromSettings 按档位组装 未选在线引擎返回null`() {
         val s = AppSettings("", "", "", TranscribeMode.OFFLINE, true, 1.0f)
         assertNull(CloudTtsConfig.fromSettings(s))
-        // 默认官方档：地址/模型/音色全内置
-        val cfg = CloudTtsConfig.fromSettings(s.copy(ttsEngine = TtsEngine.CLOUD))!!
-        assertEquals(TtsCloudProvider.ELEVEN, cfg.provider)
-        assertEquals(TtsElevenDefaults.BASE_URL, cfg.baseUrl)
-        assertEquals(TtsElevenDefaults.MODEL, cfg.model)
-        assertEquals(TtsElevenDefaults.VOICE, cfg.voice)
+        // 默认公益站档：地址/模型内置，双 Key 与音色来自设置
+        val cfg = CloudTtsConfig.fromSettings(
+            s.copy(ttsEngine = TtsEngine.CLOUD, ttsLatentKey1 = "ka", ttsLatentKey2 = "kb", ttsLatentVoice = "miko"),
+        )!!
+        assertEquals(TtsCloudProvider.LATENT, cfg.provider)
+        assertEquals("https://audio.latent.moe", cfg.baseUrl)
+        assertEquals("latent-audio", cfg.model)
+        assertEquals("miko", cfg.voice)
+        assertEquals("ka", cfg.key)
+        assertEquals("kb", cfg.key2)
+        // 官方档：地址/模型/音色全内置
+        val cfgE = CloudTtsConfig.fromSettings(
+            s.copy(ttsEngine = TtsEngine.CLOUD, ttsCloudProvider = TtsCloudProvider.ELEVEN, ttsElevenKey = "ke"),
+        )!!
+        assertEquals(TtsCloudProvider.ELEVEN, cfgE.provider)
+        assertEquals(TtsElevenDefaults.BASE_URL, cfgE.baseUrl)
+        assertEquals(TtsElevenDefaults.MODEL, cfgE.model)
+        assertEquals(TtsElevenDefaults.VOICE, cfgE.voice)
+        assertEquals("ke", cfgE.key)
         // 自定义档：四件套原样，provider 标 custom
         val cfg2 = CloudTtsConfig.fromSettings(
             s.copy(

@@ -35,8 +35,9 @@ object TtsCloudDefaults {
     const val VOICE = "$MODEL:anna"
 }
 
-/** 在线朗读的两档服务：官方 ElevenLabs（地址/协议内置）与自定义 OpenAI 兼容渠道 */
+/** 在线朗读的三档服务：公益站 Latent（默认，中文）、官方 ElevenLabs（地址/协议内置）与自定义 OpenAI 兼容渠道 */
 object TtsCloudProvider {
+    const val LATENT = "latent"
     const val ELEVEN = "eleven"
     const val CUSTOM = "custom"
 }
@@ -48,6 +49,14 @@ object TtsElevenDefaults {
 
     /** 预置音色 Roger（官方 premade 男声），实测中文可读；完整列表可在线拉取点选 */
     const val VOICE = "CwhRBWXzGAHq8TQ4Fs17"
+}
+
+/** 公益站 Latent Audio 档（audio.latent.moe）的内置参数：地址与模型写死（模型参数该站收下即忽略）。
+ *  音色没有列表接口——去网站语音库（登录后 Library）挑已发布的语音，把它的地址填进来 */
+object TtsLatentDefaults {
+    const val BASE_URL = "https://audio.latent.moe"
+    const val MODEL = "latent-audio"
+    const val VOICE = ""
 }
 
 data class AppSettings(
@@ -72,12 +81,16 @@ data class AppSettings(
     val ttsCloudKey: String = "",
     val ttsCloudVoice: String = TtsCloudDefaults.VOICE,
     val ttsCloudModel: String = TtsCloudDefaults.MODEL,
-    /** 在线朗读服务档位：官方 ElevenLabs（默认）/ 自定义 OpenAI 兼容 */
-    val ttsCloudProvider: String = TtsCloudProvider.ELEVEN,
+    /** 在线朗读服务档位：公益站 Latent（默认）/ 官方 ElevenLabs / 自定义 OpenAI 兼容 */
+    val ttsCloudProvider: String = TtsCloudProvider.LATENT,
     /** 官方 ElevenLabs 档三件套：API Key、音色 ID（可在线拉取点选）、模型 */
     val ttsElevenKey: String = "",
     val ttsElevenVoice: String = TtsElevenDefaults.VOICE,
     val ttsElevenModel: String = TtsElevenDefaults.MODEL,
+    /** 公益站 Latent 档：两个账号的 Key（句间轮换 + 撞限流互备）与音色（网站语音库里的语音地址） */
+    val ttsLatentKey1: String = "",
+    val ttsLatentKey2: String = "",
+    val ttsLatentVoice: String = TtsLatentDefaults.VOICE,
     /** 最近一次成功生成导图用的模型名；换模型后失败时用来提示用户切回去 */
     val lastGoodModel: String? = null,
     /** 是否已保存 GitHub 只读令牌（应用自更新用；令牌明文不放进本对象，单独按需读取） */
@@ -112,6 +125,9 @@ class SettingsRepository(private val context: Context) {
         val ttsElevenKey = stringPreferencesKey("tts_eleven_key")
         val ttsElevenVoice = stringPreferencesKey("tts_eleven_voice")
         val ttsElevenModel = stringPreferencesKey("tts_eleven_model")
+        val ttsLatentKey1 = stringPreferencesKey("tts_latent_key1")
+        val ttsLatentKey2 = stringPreferencesKey("tts_latent_key2")
+        val ttsLatentVoice = stringPreferencesKey("tts_latent_voice")
         val lastGoodModel = stringPreferencesKey("last_good_model")
 
         // ---- 应用自更新 ----
@@ -144,10 +160,13 @@ class SettingsRepository(private val context: Context) {
         ttsCloudKey = this[K.ttsCloudKey].orEmpty(),
         ttsCloudVoice = this[K.ttsCloudVoice] ?: TtsCloudDefaults.VOICE,
         ttsCloudModel = this[K.ttsCloudModel] ?: TtsCloudDefaults.MODEL,
-        ttsCloudProvider = this[K.ttsCloudProvider] ?: TtsCloudProvider.ELEVEN,
+        ttsCloudProvider = this[K.ttsCloudProvider] ?: TtsCloudProvider.LATENT,
         ttsElevenKey = this[K.ttsElevenKey].orEmpty(),
         ttsElevenVoice = this[K.ttsElevenVoice] ?: TtsElevenDefaults.VOICE,
         ttsElevenModel = this[K.ttsElevenModel] ?: TtsElevenDefaults.MODEL,
+        ttsLatentKey1 = this[K.ttsLatentKey1].orEmpty(),
+        ttsLatentKey2 = this[K.ttsLatentKey2].orEmpty(),
+        ttsLatentVoice = this[K.ttsLatentVoice] ?: TtsLatentDefaults.VOICE,
         lastGoodModel = this[K.lastGoodModel],
         hasGithubToken = this[K.githubToken] != null,
         updateAutoCheck = this[K.updateAutoCheck] != false,
@@ -257,6 +276,15 @@ class SettingsRepository(private val context: Context) {
             p[K.ttsElevenKey] = key.trim()
             p[K.ttsElevenVoice] = voice.trim()
             p[K.ttsElevenModel] = model.trim()
+        }
+    }
+
+    /** 公益站 Latent 档三项改动即存（两个账号的 Key / 音色），惯例同上 */
+    suspend fun setTtsLatent(key1: String, key2: String, voice: String) {
+        context.dataStore.edit { p ->
+            p[K.ttsLatentKey1] = key1.trim()
+            p[K.ttsLatentKey2] = key2.trim()
+            p[K.ttsLatentVoice] = voice.trim()
         }
     }
 
