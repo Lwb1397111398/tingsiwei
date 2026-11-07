@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a081feeefbcf9d4e82730e34cde37eba4b0580a0",
-    "note": "本轮 LLM 配置方案只改 AI 模型节与 VM 的 LLM 状态，应用更新卡零改动，职能无关",
-    "acked_at": "2026-10-31 19:39:14"
+    "sha1": "085b5e7f847b1873b6e124f9b030369afd75505f",
+    "note": "SettingsScreen 本次改动全部在朗读卡与 TTS ViewModel 状态，应用更新卡逻辑（UpdateViewModel/令牌）未动",
+    "acked_at": "2026-11-07 15:22:54"
    },
    "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
     "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
