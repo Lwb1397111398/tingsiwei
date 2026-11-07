@@ -342,16 +342,19 @@ interface CloudTtsTransport {
     )
 
     /** [authHeaderName]：鉴权头名。Authorization（缺省）按 Bearer 拼；其他头名（如 ElevenLabs 的 xi-api-key）直接用 key 原值；
-     *  [extraHeaders]：附加请求头（如公益站的 Idempotency-Key） */
+     *  [extraHeaders]：附加请求头（如公益站的 Idempotency-Key）；
+     *  [readTimeoutMs]：读超时（相邻字节包最大间隔）。流式合成持续出字节，默认 30 秒足够宽容；
+     *  公益站整段合成期间服务器一个字节都不发，必须按「生成耗时上限」给（2026-11-07 实测 104 字生成约 120 秒） */
     fun post(
         url: String,
         key: String,
         jsonBody: String,
         authHeaderName: String = "Authorization",
         extraHeaders: Map<String, String> = emptyMap(),
+        readTimeoutMs: Long = 30_000,
     ): Resp
 
-    fun get(url: String, key: String, authHeaderName: String = "Authorization"): Resp
+    fun get(url: String, key: String, authHeaderName: String = "Authorization", readTimeoutMs: Long = 30_000): Resp
 }
 
 private val WAV_RETRY_CODES = setOf(400, 404, 415, 422)
@@ -371,13 +374,14 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
         jsonBody: String,
         authHeaderName: String,
         extraHeaders: Map<String, String>,
+        readTimeoutMs: Long,
     ): CloudTtsTransport.Resp {
         val builder = Request.Builder()
             .url(url)
             .header(authHeaderName, if (authHeaderName == "Authorization") "Bearer $key" else key)
         extraHeaders.forEach { (name, value) -> builder.header(name, value) }
         val req = builder.post(jsonBody.toRequestBody("application/json".toMediaType())).build()
-        val resp = client.newCall(req).execute()
+        val resp = perCallClient(readTimeoutMs).newCall(req).execute()
         val contentType = resp.header("Content-Type").orEmpty()
         return if (resp.isSuccessful) {
             // 成功路径不能 close：body 流要在整个朗读期间慢慢读
@@ -395,13 +399,18 @@ object OkHttpCloudTtsTransport : CloudTtsTransport {
     private fun durationMs(resp: okhttp3.Response): Long? =
         resp.header("X-Audio-Duration-Ms")?.toLongOrNull()
 
-    override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
+    /** 缺省超时用常驻 client；其他超时按请求派生（newBuilder 共享连接池与线程池，开销可忽略） */
+    private fun perCallClient(readTimeoutMs: Long): OkHttpClient =
+        if (readTimeoutMs == 30_000L) client
+        else client.newBuilder().readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS).build()
+
+    override fun get(url: String, key: String, authHeaderName: String, readTimeoutMs: Long): CloudTtsTransport.Resp {
         val req = Request.Builder()
             .url(url)
             .header(authHeaderName, if (authHeaderName == "Authorization") "Bearer $key" else key)
             .get()
             .build()
-        val resp = client.newCall(req).execute()
+        val resp = perCallClient(readTimeoutMs).newCall(req).execute()
         val contentType = resp.header("Content-Type").orEmpty()
         return if (resp.isSuccessful) {
             CloudTtsTransport.Resp(resp.code, resp.body?.byteStream(), "", contentType)

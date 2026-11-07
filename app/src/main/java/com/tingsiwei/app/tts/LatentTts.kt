@@ -35,6 +35,13 @@ class LatentTts(
         private val SWITCH_KEY_CODES = setOf("concurrent_limit", "quota_exhausted", "queue_full")
 
         /**
+         * 公益站读超时：整段合成期间服务器一个字节都不发，读超时必须盖过整个生成窗口。
+         * 2026-11-07 实测 104 字生成约 120 秒（站点文档称请求最多等约 1 分钟后回 504，
+         * 实际高峰会更久），取 3 分钟：盖过实测再留余量。流式两档不受影响（仍 30 秒）。
+         */
+        const val WAIT_TIMEOUT_MS = 180_000L
+
+        /**
          * 音色归一化：接受 slug 本身（如 aria），也接受直接粘贴语音页网址——取路径最后一段，
          * 剥掉 query、fragment 与结尾斜杠。slug 按站点规则只含字母/数字/单连字符，永远不会含「/」，
          * 所以「不含 / 就原样返回」不会误伤合法输入。
@@ -101,6 +108,7 @@ class LatentTts(
             endpoint(), key,
             payload.toString(),
             mapOf("Idempotency-Key" to UUID.randomUUID().toString()),
+            WAIT_TIMEOUT_MS,
         )
         Log.i(TAG, "语音请求发出 Key#$keyNo voice=$voice 字数=${text.length} 格式=wav")
         if (resp.code == 504) {
@@ -140,7 +148,9 @@ class LatentTts(
         val url = "${apiBase().removeSuffix("/v1")}/api/jobs/$jobId/audio"
         Log.i(TAG, "504 转 job 收取 Key#$keyNo：$url")
         val resp = try {
-            transport.get(url, key)
+            transport.get(url, key, readTimeoutMs = WAIT_TIMEOUT_MS)
+        } catch (e: java.net.SocketTimeoutException) {
+            throw CloudTts.CloudTtsException("公益站成品收取等待超时（站点高峰很慢），请重试朗读本段")
         } catch (e: Exception) {
             throw CloudTts.CloudTtsException("公益站生成超时后收取成品失败，请重试朗读本段")
         }
@@ -162,11 +172,23 @@ class LatentTts(
         return pcm
     }
 
-    private fun post(url: String, key: String, jsonBody: String, extraHeaders: Map<String, String>): CloudTtsTransport.Resp =
+    private fun post(
+        url: String,
+        key: String,
+        jsonBody: String,
+        extraHeaders: Map<String, String>,
+        readTimeoutMs: Long,
+    ): CloudTtsTransport.Resp =
         try {
-            transport.post(url, key, jsonBody, extraHeaders = extraHeaders)
+            transport.post(url, key, jsonBody, extraHeaders = extraHeaders, readTimeoutMs = readTimeoutMs)
         } catch (e: CloudTts.CloudTtsException) {
             throw e
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e(TAG, "公益站等待超时：${e.message}")
+            throw CloudTts.CloudTtsException(
+                "公益站等了 3 分钟还没出声（站点高峰生成很慢，或网络波动），稍后再试；" +
+                    "如果整篇都这样，换冷门时段会更顺",
+            )
         } catch (e: Exception) {
             Log.e(TAG, "语音请求失败：${e.javaClass.simpleName} ${e.message}")
             throw CloudTts.CloudTtsException("连不上公益站，请检查手机网络（该站在境外，网络波动属正常，重试即可）")

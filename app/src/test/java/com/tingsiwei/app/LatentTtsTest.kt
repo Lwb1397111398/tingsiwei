@@ -32,8 +32,10 @@ class LatentTtsTest {
         val keys = mutableListOf<String>()
         val bodies = mutableListOf<String>()
         val idemKeys = mutableListOf<String>()
+        val timeouts = mutableListOf<Long>()
         val gets = mutableListOf<String>()
         val getKeys = mutableListOf<String>()
+        val getTimeouts = mutableListOf<Long>()
 
         override fun post(
             url: String,
@@ -41,11 +43,13 @@ class LatentTtsTest {
             jsonBody: String,
             authHeaderName: String,
             extraHeaders: Map<String, String>,
+            readTimeoutMs: Long,
         ): CloudTtsTransport.Resp {
             urls += url
             keys += key
             bodies += jsonBody
             idemKeys += extraHeaders["Idempotency-Key"].orEmpty()
+            timeouts += readTimeoutMs
             val retrying = retryCode >= 0 && bodies.size >= 2
             val code = if (retrying) retryCode else firstCode
             val err = if (retrying) retryError else firstError
@@ -56,9 +60,10 @@ class LatentTtsTest {
             }
         }
 
-        override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
+        override fun get(url: String, key: String, authHeaderName: String, readTimeoutMs: Long): CloudTtsTransport.Resp {
             gets += url
             getKeys += key
+            getTimeouts += readTimeoutMs
             return if (getCode == 200) {
                 CloudTtsTransport.Resp(200, FakeCloudTtsStream(listOf(getWav)), "", "audio/wav")
             } else {
@@ -284,6 +289,15 @@ class LatentTtsTest {
         assertEquals("aria", LatentTts.normalizeVoice("voice/aria?x=1"))
         assertEquals("aria", LatentTts.normalizeVoice("https://audio.latent.moe/voice/aria#top"))
         assertEquals("", LatentTts.normalizeVoice("   "))
+    }
+
+    @Test
+    fun `公益站读写超时拉长到3分钟`() {
+        // 站点整段合成期间不发字节：104 字实测生成约 120 秒，读超时必须盖过生成窗口（2026-11-07 实测教训）
+        val t = FakeTransport(firstCode = 504, firstError = "{\"job_id\":\"j1\"}", getWav = wavBytes(24000, shortArrayOf(1, 2)))
+        client(t).streamPcm("测", 1f) { true }
+        assertEquals(LatentTts.WAIT_TIMEOUT_MS, t.timeouts.single())
+        assertEquals("504 转收取的 GET 也要同样的长超时", LatentTts.WAIT_TIMEOUT_MS, t.getTimeouts.single())
     }
 
     @Test

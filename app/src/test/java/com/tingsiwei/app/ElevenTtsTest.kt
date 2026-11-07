@@ -40,6 +40,7 @@ class ElevenTtsTest {
             jsonBody: String,
             authHeaderName: String,
             extraHeaders: Map<String, String>,
+            readTimeoutMs: Long,
         ): CloudTtsTransport.Resp {
             urls += url
             keys += key
@@ -52,7 +53,7 @@ class ElevenTtsTest {
             }
         }
 
-        override fun get(url: String, key: String, authHeaderName: String): CloudTtsTransport.Resp {
+        override fun get(url: String, key: String, authHeaderName: String, readTimeoutMs: Long): CloudTtsTransport.Resp {
             urls += url
             keys += key
             authHeaders += authHeaderName
