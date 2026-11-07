@@ -19,9 +19,9 @@
     "acked_at": "2026-11-07 15:22:24"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "085b5e7f847b1873b6e124f9b030369afd75505f",
-    "note": "SettingsRepository/SettingsScreen 本次改动均为 TTS 公益站档（朗读职能），转写模式选择逻辑未动",
-    "acked_at": "2026-11-07 15:22:24"
+    "sha1": "a7fc86e3bf2124084e22f503ba5c8a089b6c9997",
+    "note": "本轮只改朗读卡 ChoiceRow 文案与公益站音色框，未触及转写方式单选",
+    "acked_at": "2026-11-07 16:09:13"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
