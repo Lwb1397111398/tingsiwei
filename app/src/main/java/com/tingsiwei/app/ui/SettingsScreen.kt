@@ -247,7 +247,6 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     )
                 }
                 // 已保存的配置方案：点一套即整套切换（地址、Key、模型一起换），✕ 删除
-                // AnimatedSection 内部没有布局容器，多个子元素会叠绘——必须自己包 Column
                 AnimatedSection(visible = profiles.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                         ThinDivider()
@@ -928,7 +927,11 @@ private fun AnimatedSection(
         enter = expandVertically(Motion.standard()) + fadeIn(tween(Motion.Snappy)),
         exit = shrinkVertically(Motion.standard()) + fadeOut(tween(Motion.Snappy)),
     ) {
-        content()
+        // AnimatedVisibility 内部是 Box，多个兄弟元素会全部叠画在同一处（坑 16）——
+        // 统一在这里包一层 Column 竖排，间距与 SectionCard 一致，调用点不必各自包
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+            content()
+        }
     }
 }
 
