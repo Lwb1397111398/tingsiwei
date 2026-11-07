@@ -5,6 +5,11 @@
     "sha1": "a081feeefbcf9d4e82730e34cde37eba4b0580a0",
     "note": "本轮 LLM 配置方案只改 AI 模型节与 VM 的 LLM 状态，应用更新卡零改动，职能无关",
     "acked_at": "2026-10-31 19:39:14"
+   },
+   "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
+    "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
+    "note": "AppNav 本次仅加分类相关路由（record/textinput 带 categoryId 参数、categorymap/categorymanage），自更新弹窗挂载与静默检查逻辑未动",
+    "acked_at": "2026-11-07 14:16:19"
    }
   },
   "转写模式选择模块总览.md": {
@@ -24,14 +29,14 @@
     "acked_at": "2026-10-31 22:57:19"
    },
    "app/src/main/java/com/tingsiwei/app/ui/RecordScreen.kt": {
-    "sha1": "1b4fb247716fbfd8fd1e092ec3e2b7e2b25bbbfc",
-    "note": "2026-10-31 动效精修批只改 RecordScreen/SettingsScreen 的动画与 imePadding，transcribeMode 读写与切换逻辑零改动",
-    "acked_at": "2026-10-31 18:36:04"
+    "sha1": "0c195a0d8e3d1047414c34ace5673cd9e9841c8f",
+    "note": "RecordScreen 仅加归入分类 chip、RecordSession 仅加落库参数，transcribe_mode 选择逻辑未动",
+    "acked_at": "2026-11-07 14:16:37"
    },
    "app/src/main/java/com/tingsiwei/app/record/RecordSession.kt": {
-    "sha1": "3a1d573dcad28cfd825532a66964c072eb2a9c3b",
-    "note": "timings 落库与 segArrivals 是产物扩展，不改 OFFLINE/SYSTEM 模式选择与分流职能（默认值/设置页选中态/RecordSession 分流条件均未动）",
-    "acked_at": "2026-10-31 22:57:19"
+    "sha1": "ceefe37ad29baa145733f57b08bf898bf9f56a1b",
+    "note": "RecordScreen 仅加归入分类 chip、RecordSession 仅加落库参数，transcribe_mode 选择逻辑未动",
+    "acked_at": "2026-11-07 14:16:37"
    }
   },
   "设置页模块总览.md": {
@@ -39,6 +44,13 @@
     "sha1": "8a3b461dce090834f544406d6669ebd143ac478f",
     "note": "本模块总览已在同一次提交中更新（最后更新条目记录了控件重排与新 SettingsParts.kt）",
     "acked_at": "2026-10-25 16:03:59"
+   }
+  },
+  "录音服务模块总览.md": {
+   "app/src/main/java/com/tingsiwei/app/record/RecordSession.kt": {
+    "sha1": "ceefe37ad29baa145733f57b08bf898bf9f56a1b",
+    "note": "RecordSession.stopAndSave 仅加可选 categoryId 参数（默认 null），录音/前台服务/音频文件链路未动",
+    "acked_at": "2026-11-07 14:16:36"
    }
   }
  }
