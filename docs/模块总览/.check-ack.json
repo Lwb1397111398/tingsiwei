@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "085b5e7f847b1873b6e124f9b030369afd75505f",
-    "note": "SettingsScreen 本次改动全部在朗读卡与 TTS ViewModel 状态，应用更新卡逻辑（UpdateViewModel/令牌）未动",
-    "acked_at": "2026-11-07 15:22:54"
+    "sha1": "a7fc86e3bf2124084e22f503ba5c8a089b6c9997",
+    "note": "本轮只改朗读卡 ChoiceRow 文案与公益站音色框 label/hint，未触及应用更新卡",
+    "acked_at": "2026-11-07 16:08:49"
    },
    "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
     "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
