@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a7fc86e3bf2124084e22f503ba5c8a089b6c9997",
-    "note": "本轮只改朗读卡 ChoiceRow 文案与公益站音色框 label/hint，未触及应用更新卡",
-    "acked_at": "2026-11-07 16:08:49"
+    "sha1": "a28797c5f9fabf0cf10b46e72e1300db973b72ed",
+    "note": "本轮只改朗读卡音色框与快捷chips，未触及应用更新卡",
+    "acked_at": "2026-11-07 16:20:43"
    },
    "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
     "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
@@ -14,14 +14,14 @@
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "f17b79b906f4ed84529ba6f63d96f517d51243e9",
-    "note": "SettingsRepository/SettingsScreen 本次改动均为 TTS 公益站档（朗读职能），转写模式选择逻辑未动",
-    "acked_at": "2026-11-07 15:22:24"
+    "sha1": "83e941462ef9a43e36bab1246bde1f79b078d934",
+    "note": "本轮只改朗读卡音色框与快捷chips，未触及转写方式单选",
+    "acked_at": "2026-11-07 16:20:43"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a7fc86e3bf2124084e22f503ba5c8a089b6c9997",
-    "note": "本轮只改朗读卡 ChoiceRow 文案与公益站音色框，未触及转写方式单选",
-    "acked_at": "2026-11-07 16:09:13"
+    "sha1": "a28797c5f9fabf0cf10b46e72e1300db973b72ed",
+    "note": "本轮只改朗读卡音色框与快捷chips，未触及转写方式单选",
+    "acked_at": "2026-11-07 16:20:43"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
