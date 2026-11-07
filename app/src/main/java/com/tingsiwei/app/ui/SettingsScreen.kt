@@ -514,12 +514,21 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                             value = ttsLatentVoice,
                             onValueChange = { vm.setTtsLatentVoice(it) },
                             label = "音色（语音库语音页的地址，整段网址粘贴进来也行）",
-                            placeholder = "点开那个语音复制网址，如 …/voice/aria",
+                            placeholder = "点开那个语音复制网址，或点下方常用音色",
+                        )
+                        // 常用音色快捷按钮：点选即填入音色框；手填其他语音地址不受限（自定义）
+                        ChipPicker(
+                            options = TtsLatentDefaults.VOICE_PRESETS.map { it to it },
+                            selectedValue = ttsLatentVoice,
+                            onSelect = {
+                                vm.setTtsLatentVoice(it)
+                                keyboard?.hide()
+                            },
                         )
                         SettingHint(
                             "两句一换 Key：这句用账号 1、那句用账号 2；播放当前句时，下一句已用另一把 Key 在生成，不怕限流。\n" +
-                                "音色填语音库（Library）里已发布语音的「地址」——点开那个语音，把网址整段粘贴进来即可；" +
-                                "页面上的中文显示名（如「青叔音」）不是地址。语速滑条对此档无效。"
+                                "音色填语音库（Library）里已发布语音的「地址」：常用的四个点上方按钮即可；" +
+                                "其他语音点开它把网址整段粘贴进来（页面中文显示名不是地址），想换随时手填。语速滑条对此档无效。"
                         )
                     }
                     AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.ELEVEN) {

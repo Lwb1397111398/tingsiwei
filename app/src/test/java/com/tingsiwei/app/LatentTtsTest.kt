@@ -287,6 +287,15 @@ class LatentTtsTest {
     }
 
     @Test
+    fun `默认音色是常用音色之一`() {
+        assertTrue(
+            "默认音色必须出现在快捷按钮列表里（否则新装默认与 chips 脱节）",
+            TtsLatentDefaults.VOICE in TtsLatentDefaults.VOICE_PRESETS,
+        )
+        assertEquals("老板挑定的默认音色", "ixx", TtsLatentDefaults.VOICE)
+    }
+
+    @Test
     fun `音色填成语音页网址 自动取末段发请求`() {
         val t = FakeTransport(wav = wavBytes(24000, shortArrayOf(1, 2)))
         client(t, voice = "https://audio.latent.moe/voice/aria").streamPcm("测", 1f) { true }

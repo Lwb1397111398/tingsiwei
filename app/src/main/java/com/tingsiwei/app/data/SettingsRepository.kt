@@ -52,11 +52,15 @@ object TtsElevenDefaults {
 }
 
 /** 公益站 Latent Audio 档（audio.latent.moe）的内置参数：地址与模型写死（模型参数该站收下即忽略）。
- *  音色没有列表接口——去网站语音库（登录后 Library）挑已发布的语音，把它的地址填进来 */
+ *  音色没有列表接口——去网站语音库（登录后 Library）挑已发布的语音，把它的地址（slug）填进来；
+ *  [VOICE] 默认取 [VOICE_PRESETS] 第一个（老板挑定的中文音色，2026-11-07 两把 Key 实测均可用），其余做快捷按钮 */
 object TtsLatentDefaults {
     const val BASE_URL = "https://audio.latent.moe"
     const val MODEL = "latent-audio"
-    const val VOICE = ""
+    const val VOICE = "ixx"
+
+    /** 常用音色快捷按钮（老板挑选的四个中文语音 slug）；手填其他语音地址不受此限制 */
+    val VOICE_PRESETS = listOf("ixx", "voice-16", "voice-34", "1-6")
 }
 
 data class AppSettings(
