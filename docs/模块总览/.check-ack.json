@@ -14,14 +14,14 @@
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "744f78012f37a9412ad185fb45fedee99dcba2ad",
-    "note": "本轮只加 llm_profiles/llm_active_profile 两键与配置方案 UI，transcribe_mode 及其界面零改动，职能无关",
-    "acked_at": "2026-10-31 19:39:15"
+    "sha1": "f17b79b906f4ed84529ba6f63d96f517d51243e9",
+    "note": "SettingsRepository/SettingsScreen 本次改动均为 TTS 公益站档（朗读职能），转写模式选择逻辑未动",
+    "acked_at": "2026-11-07 15:22:24"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a081feeefbcf9d4e82730e34cde37eba4b0580a0",
-    "note": "本轮只加 llm_profiles/llm_active_profile 两键与配置方案 UI，transcribe_mode 及其界面零改动，职能无关",
-    "acked_at": "2026-10-31 19:39:15"
+    "sha1": "085b5e7f847b1873b6e124f9b030369afd75505f",
+    "note": "SettingsRepository/SettingsScreen 本次改动均为 TTS 公益站档（朗读职能），转写模式选择逻辑未动",
+    "acked_at": "2026-11-07 15:22:24"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
