@@ -479,13 +479,13 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     // 三档：公益站 Latent（默认，双 Key 轮换）/官方 ElevenLabs 只填 Key；自定义填任意 OpenAI 兼容渠道。三档配置互不覆盖
                     ChoiceRow(
                         label = "公益站（中文）",
-                        description = "双 Key 轮换防限流，句间预取不断句；每号每周约 4 小时",
+                        description = "中文朗读优先用它。双 Key 轮换防限流，句间预取不断句；每号每周约 4 小时",
                         selected = ttsCloudProvider == TtsCloudProvider.LATENT,
                         onClick = { vm.setTtsCloudProvider(TtsCloudProvider.LATENT) },
                     )
                     ChoiceRow(
-                        label = "官方 ElevenLabs",
-                        description = "内置地址，填 Key 即用；免费档每月 1 万字符",
+                        label = "官方 ElevenLabs（英文）",
+                        description = "英文朗读更自然。内置地址，填 Key 即用；免费档每月 1 万字符",
                         selected = ttsCloudProvider == TtsCloudProvider.ELEVEN,
                         onClick = { vm.setTtsCloudProvider(TtsCloudProvider.ELEVEN) },
                     )
@@ -513,12 +513,13 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                         SettingsField(
                             value = ttsLatentVoice,
                             onValueChange = { vm.setTtsLatentVoice(it) },
-                            label = "音色（网站语音库里已发布语音的地址）",
-                            placeholder = "登录 audio.latent.moe 在 Library 复制",
+                            label = "音色（语音库语音页的地址，整段网址粘贴进来也行）",
+                            placeholder = "点开那个语音复制网址，如 …/voice/aria",
                         )
                         SettingHint(
                             "两句一换 Key：这句用账号 1、那句用账号 2；播放当前句时，下一句已用另一把 Key 在生成，不怕限流。\n" +
-                                "音色要在网站语音库（Library）挑已发布的语音、复制它的地址；中文语音才读得自然。语速滑条对此档无效。"
+                                "音色填语音库（Library）里已发布语音的「地址」——点开那个语音，把网址整段粘贴进来即可；" +
+                                "页面上的中文显示名（如「青叔音」）不是地址。语速滑条对此档无效。"
                         )
                     }
                     AnimatedSection(visible = ttsCloudProvider == TtsCloudProvider.ELEVEN) {

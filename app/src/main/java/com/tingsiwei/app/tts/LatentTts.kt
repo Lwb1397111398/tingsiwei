@@ -33,6 +33,17 @@ class LatentTts(
 
         /** 这两类限流值得换另一把 Key 重试一次；其余错误换 Key 也没用 */
         private val SWITCH_KEY_CODES = setOf("concurrent_limit", "quota_exhausted", "queue_full")
+
+        /**
+         * 音色归一化：接受 slug 本身（如 aria），也接受直接粘贴语音页网址——取路径最后一段，
+         * 剥掉 query、fragment 与结尾斜杠。slug 按站点规则只含字母/数字/单连字符，永远不会含「/」，
+         * 所以「不含 / 就原样返回」不会误伤合法输入。
+         */
+        internal fun normalizeVoice(raw: String): String {
+            val t = raw.trim()
+            if (t.isEmpty() || !t.contains('/')) return t
+            return t.substringBefore('?').substringBefore('#').trimEnd('/').substringAfterLast('/')
+        }
     }
 
     /** 请求序号：句间轮换 Key 的依据（两句一轮） */
@@ -57,9 +68,9 @@ class LatentTts(
      * onPcm 回 false 属正常停止（结果直接丢弃），不抛异常。失败抛 [CloudTts.CloudTtsException]。
      */
     override fun streamPcm(text: String, speed: Float, onPcm: (ShortArray) -> Boolean) {
-        val voice = cfg.voice.trim()
+        val voice = normalizeVoice(cfg.voice)
         if (voice.isEmpty()) {
-            throw CloudTts.CloudTtsException("还没填音色：到公益站语音库挑一个已发布的语音，把它的地址填进设置")
+            throw CloudTts.CloudTtsException("还没填音色：到公益站语音库挑一个已发布的语音，把它语音页的网址（或网址最后一段）填进设置")
         }
         val ks = keys()
         if (ks.isEmpty()) {
@@ -173,7 +184,7 @@ class LatentTts(
         val switchKey = code == 429 || siteCode in SWITCH_KEY_CODES
         val msg = when {
             code == 401 -> "公益站的 API Key 无效或已过期（Key 30 天有效，登录网站可续期）"
-            code == 404 -> "音色「${cfg.voice.trim()}」在公益站不存在或未发布：去网站语音库确认该语音已发布，再复制它的地址填进设置"
+            code == 404 -> "音色「${normalizeVoice(cfg.voice)}」在公益站不存在或未发布：注意填的是语音页网址里的地址（不是页面上的显示名），且该语音须已发布"
             siteCode == "concurrent_limit" -> "公益站 Key#$keyNo 的并发满了（每号同时 4 路），换另一把 Key 重试中"
             siteCode == "quota_exhausted" -> "公益站 Key#$keyNo 本周配额用完了（每号每周约 4 小时），换另一把 Key"
             siteCode == "queue_full" -> "公益站队列满了，稍等再试"

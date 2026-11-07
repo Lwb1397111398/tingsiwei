@@ -274,4 +274,23 @@ class LatentTtsTest {
         }
         assertTrue("接口默认流式不能预取", !streaming.deliversWholeChunks)
     }
+
+    @Test
+    fun `音色归一化 slug原样 网址取末段`() {
+        assertEquals("aria", LatentTts.normalizeVoice("aria"))
+        assertEquals("miko", LatentTts.normalizeVoice("  miko  "))
+        assertEquals("aria", LatentTts.normalizeVoice("https://audio.latent.moe/voice/aria"))
+        assertEquals("aria", LatentTts.normalizeVoice("audio.latent.moe/voice/aria/"))
+        assertEquals("aria", LatentTts.normalizeVoice("voice/aria?x=1"))
+        assertEquals("aria", LatentTts.normalizeVoice("https://audio.latent.moe/voice/aria#top"))
+        assertEquals("", LatentTts.normalizeVoice("   "))
+    }
+
+    @Test
+    fun `音色填成语音页网址 自动取末段发请求`() {
+        val t = FakeTransport(wav = wavBytes(24000, shortArrayOf(1, 2)))
+        client(t, voice = "https://audio.latent.moe/voice/aria").streamPcm("测", 1f) { true }
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(t.bodies[0]).jsonObject
+        assertEquals("aria", body["voice"]!!.jsonPrimitive.content)
+    }
 }
