@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a28797c5f9fabf0cf10b46e72e1300db973b72ed",
-    "note": "本轮只改朗读卡音色框与快捷chips，未触及应用更新卡",
-    "acked_at": "2026-11-07 16:20:43"
+    "sha1": "f1e69fbe7f3964867861321d2fe2fd09f5ba0d43",
+    "note": "设置页遮挡修复只改 AnimatedSection 容器内部包裹（条件块竖排），应用更新卡的控件结构与职能面未动",
+    "acked_at": "2026-11-07 16:46:28"
    },
    "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
     "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
