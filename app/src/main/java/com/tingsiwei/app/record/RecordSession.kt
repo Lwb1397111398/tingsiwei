@@ -119,7 +119,8 @@ object RecordSession {
         isPaused.value = false
     }
 
-    fun stopAndSave() {
+    /** @param categoryId 归入的分类（首页筛选继承 + 录音页可改），null = 未分类 */
+    fun stopAndSave(categoryId: Long? = null) {
         if (!isRecording.value) return
         val rec = recorder ?: return
         sysRecognizer?.stop()
@@ -155,6 +156,7 @@ object RecordSession {
                         durationMs = duration,
                         content = content,
                         timings = timingsJson,
+                        categoryId = categoryId,
                     )
                 )
                 // 离开录音页后处理也要继续：交给 App 级协程，进详情页只是看进度

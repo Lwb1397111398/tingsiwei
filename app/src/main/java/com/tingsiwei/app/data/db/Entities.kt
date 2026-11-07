@@ -19,9 +19,29 @@ object NoteSource {
     const val RECORD = "RECORD" // 现场录音
     const val IMPORT = "IMPORT" // 导入音频文件
     const val TEXT = "TEXT"     // 手动输入文字
+    const val MERGED = "MERGED" // 分类总导图（AI 优化整合的固化产出）
 }
 
-@Entity(tableName = "notes")
+/** 用户自建分类（课程/当事人/项目……名字由用户定），笔记通过 notes.categoryId 归入 */
+@Entity(tableName = "categories")
+data class CategoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** 首页分类条显示顺序，上移/下移交换此值 */
+    val sortOrder: Int = 0,
+    val createdAt: Long,
+)
+
+/** 分类条投影：分类 + 该分类下笔记数（未包含 source=MERGED 的总导图笔记） */
+data class CategoryWithCount(
+    val id: Long,
+    val name: String,
+    val sortOrder: Int,
+    val createdAt: Long,
+    val noteCount: Int,
+)
+
+@Entity(tableName = "notes", indices = [Index("categoryId")])
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
@@ -44,6 +64,8 @@ data class NoteEntity(
     val thinking: String? = null,
     /** 多个顶层主题时是否包了虚拟根节点 */
     val virtualRoot: Boolean = false,
+    /** 归属分类，null = 未分类；无外键约束，删分类由 CategoryDao 事务善后 */
+    val categoryId: Long? = null,
     val errorMsg: String? = null,
 )
 
@@ -60,6 +82,7 @@ data class NoteListItem(
     val durationMs: Long = 0,
     val audioPath: String? = null,
     val preview: String? = null,
+    val categoryId: Long? = null,
 )
 
 @Entity(

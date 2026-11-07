@@ -121,6 +121,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -136,6 +138,7 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     val suggestion by vm.suggestion.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val ttsMsg by vm.uiMessage.collectAsState()
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(note?.id, note?.status) { vm.maybeRunPipeline() }
     LaunchedEffect(ttsMsg) {
@@ -192,6 +195,19 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     ) { pad ->
         val n = note
         Column(modifier = Modifier.padding(pad).fillMaxSize().imePadding()) {
+            // 分类标签：点击改归类（总导图笔记绑定分类，不显示）
+            n?.let { noteVal ->
+                if (noteVal.source != NoteSource.MERGED) {
+                    CategoryTag(
+                        categoryId = noteVal.categoryId,
+                        onPick = { cid ->
+                            scope.launch(Dispatchers.IO) {
+                                App.get().database.noteDao().setCategory(noteVal.id, cid)
+                            }
+                        },
+                    )
+                }
+            }
             // 状态提示条：三种情形（进行中 / 出错 / 完成但有提示）统一成一块；
             // 出现/消失带展开收起动画——生成完成时横幅是「收回去」而不是「啪一下没了」。
             // banner 变 null 后退场动画期间仍显示最后一份内容（lastBanner 缓存）。
@@ -892,6 +908,7 @@ private fun subtitleFor(n: NoteEntity): String {
     val source = when (n.source) {
         com.tingsiwei.app.data.db.NoteSource.RECORD -> "录音"
         com.tingsiwei.app.data.db.NoteSource.IMPORT -> "导入音频"
+        com.tingsiwei.app.data.db.NoteSource.MERGED -> "分类总导图"
         else -> "文字"
     }
     val parts = buildList {
@@ -1171,5 +1188,47 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         player = null
         tts.shutdown()
         super.onCleared()
+    }
+}
+
+/** 详情页顶部的分类标签：色点 + 分类名，点击弹分类选择器改归类（不动 updatedAt）。 */
+@Composable
+private fun CategoryTag(categoryId: Long?, onPick: (Long?) -> Unit) {
+    var showPicker by remember { mutableStateOf(false) }
+    val categories by App.get().database.categoryDao().observeAll()
+        .collectAsState(initial = emptyList())
+    val name = categories.firstOrNull { it.id == categoryId }?.name
+
+    Surface(
+        onClick = { showPicker = true },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.padding(horizontal = Spacing.screen, vertical = Spacing.sm),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(CategoryUi.color(categoryId)),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                name ?: "未分类 · 点击归类",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showPicker) {
+        CategoryPickerSheet(
+            current = categoryId,
+            onDismiss = { showPicker = false },
+            onPick = { onPick(it); showPicker = false },
+        )
     }
 }

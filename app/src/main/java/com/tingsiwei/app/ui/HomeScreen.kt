@@ -34,21 +34,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.FolderOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -86,6 +94,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tingsiwei.app.App
+import com.tingsiwei.app.data.db.CategoryWithCount
 import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteListItem
 import com.tingsiwei.app.data.db.NoteSource
@@ -106,6 +115,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -119,19 +129,31 @@ import java.util.Locale
 @Composable
 fun HomeScreen(
     onOpenNote: (Long) -> Unit,
-    onOpenRecord: () -> Unit,
-    onOpenTextInput: () -> Unit,
+    onOpenRecord: (Long?) -> Unit,
+    onOpenTextInput: (Long?) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenCategoryMap: (Long) -> Unit,
+    onOpenCategoryManage: () -> Unit,
 ) {
     val vm: HomeViewModel = viewModel()
     val notes by vm.notes.collectAsState()
     val query by vm.query.collectAsState()
     val message by vm.message.collectAsState()
+    val filter by vm.filter.collectAsState()
+    val categories by vm.categories.collectAsState()
     val stages by NoteProcessor.stages.collectAsState()
     val snackbar = remember { SnackbarHostState() }
 
     var menuOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<NoteListItem?>(null) }
+    // 长按先弹菜单（归类/删除），选「归类到…」再弹分类选择器——目标暂存在 moveTarget
+    var pendingMenu by remember { mutableStateOf<NoteListItem?>(null) }
+    var moveTarget by remember { mutableStateOf<NoteListItem?>(null) }
+    var showMoveSheet by remember { mutableStateOf(false) }
+
+    // 新建入口继承当前筛选的分类（选「全部/未分类」时自然不归类）
+    val createIntoCategory: Long? = filter?.takeIf { it > 0 }
+    val categoryNames = remember(categories) { categories.associate { it.id to it.name } }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importAudio(uri)
@@ -142,6 +164,15 @@ fun HomeScreen(
             snackbar.showSnackbar(it)
             vm.message.value = null
         }
+    }
+
+    // 顶栏副标题跟随筛选：具体分类时标出「在哪看」
+    val activeCategory = categories.firstOrNull { it.id == filter }
+    val subtitle = when {
+        activeCategory != null -> "${activeCategory.name} · ${notes.size} 条"
+        filter == HomeViewModel.FILTER_UNCATEGORIZED -> "未分类 · ${notes.size} 条"
+        notes.isEmpty() -> "把听到的，变成看懂的"
+        else -> "${notes.size} 条笔记"
     }
 
     Scaffold(
@@ -156,7 +187,7 @@ fun HomeScreen(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            if (notes.isEmpty()) "把听到的，变成看懂的" else "${notes.size} 条笔记",
+                            subtitle,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -206,9 +237,9 @@ fun HomeScreen(
                     ) {
                         NewActionPill(
                             icon = Icons.Filled.Mic,
-                            label = "开始录音",
+                            label = if (createIntoCategory != null) "开始录音（归入${categoryNames[createIntoCategory]}）" else "开始录音",
                             modifier = Modifier.staggerIn(0),
-                            onClick = { menuOpen = false; onOpenRecord() },
+                            onClick = { menuOpen = false; onOpenRecord(createIntoCategory) },
                         )
                         NewActionPill(
                             icon = Icons.Filled.GraphicEq,
@@ -220,7 +251,7 @@ fun HomeScreen(
                             icon = Icons.Filled.Edit,
                             label = "输入文字 / 粘贴导图",
                             modifier = Modifier.staggerIn(2),
-                            onClick = { menuOpen = false; onOpenTextInput() },
+                            onClick = { menuOpen = false; onOpenTextInput(createIntoCategory) },
                         )
                         Spacer(Modifier.height(2.dp))
                     }
@@ -257,21 +288,46 @@ fun HomeScreen(
                 onQueryChange = { vm.query.value = it },
                 modifier = Modifier.padding(horizontal = Spacing.screen, vertical = Spacing.sm),
             )
+            CategoryBar(
+                categories = categories,
+                filter = filter,
+                onSelect = { vm.filter.value = it },
+                onManage = onOpenCategoryManage,
+            )
             when {
                 notes.isEmpty() && query.isBlank() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        EmptyState(
-                            icon = Icons.Outlined.AutoStories,
-                            title = "还没有笔记",
-                            description = "录一段上课、聊天或面试，\n自动变成思维导图和一段帮你记忆的思路。",
-                            action = {
-                                FilledTonalButton(onClick = onOpenRecord) {
-                                    Icon(Icons.Filled.Mic, null, Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("录第一条")
-                                }
-                            },
-                        )
+                        when {
+                            filter == HomeViewModel.FILTER_UNCATEGORIZED -> EmptyState(
+                                icon = Icons.Outlined.FolderOff,
+                                title = "没有未分类的笔记",
+                                description = "所有笔记都已归入分类，\n或直接录一条新的。",
+                            )
+                            activeCategory != null -> EmptyState(
+                                icon = Icons.Outlined.AutoStories,
+                                title = "「${activeCategory.name}」还没有笔记",
+                                description = "录这一类的第一段内容，\n它会和同类的笔记排在一起。",
+                                action = {
+                                    FilledTonalButton(onClick = { onOpenRecord(activeCategory.id) }) {
+                                        Icon(Icons.Filled.Mic, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("录一条")
+                                    }
+                                },
+                            )
+                            else -> EmptyState(
+                                icon = Icons.Outlined.AutoStories,
+                                title = "还没有笔记",
+                                description = "录一段上课、聊天或面试，\n自动变成思维导图和一段帮你记忆的思路。",
+                                action = {
+                                    FilledTonalButton(onClick = { onOpenRecord(null) }) {
+                                        Icon(Icons.Filled.Mic, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("录第一条")
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 notes.isEmpty() -> {
@@ -297,6 +353,16 @@ fun HomeScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(Spacing.md),
                     ) {
+                        // 选中具体分类时，列表顶部给一张总导图入口卡
+                        if (activeCategory != null) {
+                            item(key = "categoryMapCard", contentType = "categoryMapCard") {
+                                CategoryMapCard(
+                                    category = activeCategory,
+                                    modifier = Modifier.staggerIn(0),
+                                    onClick = { onOpenCategoryMap(activeCategory.id) },
+                                )
+                            }
+                        }
                         // 稳定 key：删除/更新时 animateItem 才能做出「淡出移位」而不是整列跳动
                         itemsIndexed(
                             notes,
@@ -311,9 +377,10 @@ fun HomeScreen(
                                 NoteCard(
                                     note = note,
                                     stage = stages[note.id],
+                                    categoryNames = categoryNames,
                                     modifier = Modifier.staggerIn(i, enabled = playEnter),
                                     onClick = { onOpenNote(note.id) },
-                                    onLongClick = { pendingDelete = note },
+                                    onLongClick = { pendingMenu = note },
                                 )
                             }
                         }
@@ -321,6 +388,53 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // 长按菜单：归类 / 删除。总导图笔记（MERGED）绑定分类，没有「归类到」
+    pendingMenu?.let { note ->
+        AlertDialog(
+            onDismissRequest = { pendingMenu = null },
+            title = { Text(note.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    if (note.source != NoteSource.MERGED) {
+                        TextButton(
+                            onClick = { moveTarget = note; showMoveSheet = true; pendingMenu = null },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Filled.DriveFileMove, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("归类到…")
+                        }
+                    }
+                    TextButton(
+                        onClick = { pendingDelete = note; pendingMenu = null },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Filled.Delete, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(8.dp))
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pendingMenu = null }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showMoveSheet) {
+        CategoryPickerSheet(
+            current = moveTarget?.categoryId,
+            onDismiss = { showMoveSheet = false; moveTarget = null },
+            onPick = { target ->
+                moveTarget?.let { vm.moveTo(it.id, target) }
+                showMoveSheet = false
+                moveTarget = null
+                vm.message.value = if (target == null) "已移到未分类" else "归类完成"
+            },
+        )
     }
 
     pendingDelete?.let { note ->
@@ -446,11 +560,173 @@ private fun NewActionPill(
     }
 }
 
+/** 首页分类筛选条：全部 / 各分类（色点+名+条数）/ 未分类 / 管理。 */
+@Composable
+private fun CategoryBar(
+    categories: List<CategoryWithCount>,
+    filter: Long?,
+    onSelect: (Long?) -> Unit,
+    onManage: () -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = Spacing.screen),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        modifier = Modifier.padding(bottom = Spacing.xs),
+    ) {
+        item(key = "all") {
+            CategoryChip(selected = filter == null, label = "全部", onClick = { onSelect(null) })
+        }
+        items(categories, key = { it.id }) { c ->
+            CategoryChip(
+                selected = filter == c.id,
+                label = c.name,
+                count = c.noteCount,
+                colorDot = CategoryUi.color(c.id),
+                onClick = { onSelect(c.id) },
+            )
+        }
+        item(key = "uncategorized") {
+            CategoryChip(
+                selected = filter == HomeViewModel.FILTER_UNCATEGORIZED,
+                label = "未分类",
+                onClick = { onSelect(HomeViewModel.FILTER_UNCATEGORIZED) },
+            )
+        }
+        item(key = "manage") {
+            Surface(
+                onClick = onManage,
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.Tune,
+                        null,
+                        Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "管理",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 筛选条上的一枚 chip：选中态用主色容器，带可选色点与条数。 */
+@Composable
+private fun CategoryChip(
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    count: Int = -1,
+    colorDot: Color? = null,
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            colorDot?.let { c ->
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(c),
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+            if (count >= 0) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "$count",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 分类总导图入口卡：固定显示在分类视图列表顶部，点开进入拼接总导图页。 */
+@Composable
+private fun CategoryMapCard(
+    category: CategoryWithCount,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shadowElevation = 1.dp,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(Spacing.lg), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.AccountTree,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(Spacing.md))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "分类总导图",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    "${category.noteCount} 条笔记 · 按时间拼成一幅完整导图",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NoteCard(
     note: NoteListItem,
     stage: String?,
+    categoryNames: Map<Long, String>,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -504,6 +780,27 @@ private fun NoteCard(
                 }
                 Spacer(Modifier.height(Spacing.sm))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 分类徽标：色点 + 名字，在「全部」视图一眼看出归属
+                    note.categoryId?.let { cid ->
+                        categoryNames[cid]?.let { name ->
+                            Box(
+                                Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(CategoryUi.color(cid)),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 90.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                    }
                     Text(
                         relativeTime(note.updatedAt),
                         style = MaterialTheme.typography.labelSmall,
@@ -568,7 +865,7 @@ private fun NoteCard(
     }
 }
 
-/** 来源标记方块：录音=麦克风、导入=声波、手输=笔。 */
+/** 来源标记方块：录音=麦克风、导入=声波、手输=笔、分类总导图=结构树（衍生品，视觉上低调）。 */
 @Composable
 private fun SourceMark(source: String) {
     val (icon, tint, bg) = when (source) {
@@ -581,6 +878,11 @@ private fun SourceMark(source: String) {
             Icons.Filled.GraphicEq,
             MaterialTheme.colorScheme.onSecondaryContainer,
             MaterialTheme.colorScheme.secondaryContainer,
+        )
+        NoteSource.MERGED -> Triple(
+            Icons.Filled.AccountTree,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            MaterialTheme.colorScheme.surfaceContainerHighest,
         )
         else -> Triple(
             Icons.Filled.Edit,
@@ -666,13 +968,33 @@ class HomeViewModel : ViewModel() {
     val query = MutableStateFlow("")
     val message = MutableStateFlow<String?>(null)
 
+    companion object {
+        /** 分类筛选哨兵：-1 = 未分类（categoryId IS NULL）；null = 全部；>0 = 分类 id */
+        const val FILTER_UNCATEGORIZED = -1L
+    }
+
+    /** 首页分类筛选：新建入口、列表范围、搜索范围都跟着它走 */
+    val filter = MutableStateFlow<Long?>(null)
+
+    /** 分类条数据（带各类笔记数，不含总导图笔记） */
+    val categories = db.categoryDao().observeWithCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // 轻量投影 + SQL 搜索：整篇原文/导图 JSON 不再拉进内存（旧实现 observeAll 全实体 + 内存过滤，
-    // 笔记多且长时首页常驻内存随内容线性膨胀）；有搜索词时切到 LIKE 查询
+    // 笔记多且长时首页常驻内存随内容线性膨胀）；有搜索词时切到 LIKE 查询，范围跟随分类筛选
     @OptIn(ExperimentalCoroutinesApi::class)
-    val notes = query.flatMapLatest { q ->
-        if (q.isBlank()) db.noteDao().observeList()
-        else db.noteDao().searchList(q)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val notes = combine(filter, query) { f, q -> f to q }
+        .flatMapLatest { (f, q) ->
+            if (q.isBlank()) db.noteDao().observeList(f)
+            else db.noteDao().searchList(q, f)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 长按归类：不动 updatedAt（归类不算编辑内容，避免「全部」视图排序跳动） */
+    fun moveTo(noteId: Long, categoryId: Long?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            db.noteDao().setCategory(noteId, categoryId)
+        }
+    }
 
     fun delete(note: NoteListItem) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -697,6 +1019,8 @@ class HomeViewModel : ViewModel() {
 
     fun importAudio(uri: Uri) {
         val context: Context = App.get()
+        // 继承首页当前筛选的分类（选「全部/未分类」时为 null）
+        val categoryId = filter.value?.takeIf { it > 0 }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val dir = File(context.filesDir, "recordings").apply { mkdirs() }
@@ -730,11 +1054,14 @@ class HomeViewModel : ViewModel() {
                         source = NoteSource.IMPORT,
                         audioPath = dst.absolutePath,
                         durationMs = durationMs,
+                        categoryId = categoryId,
                     )
                 )
                 // 导入即开跑：不必再要求用户点开一次笔记（App 级协程，离开页面也不会断）
                 NoteProcessor.start(id, NoteProcessor.Kind.TRANSCRIBE)
-                message.value = "导入成功！已开始转写并生成导图，点开笔记可看进度"
+                val into = categoryId?.let { db.categoryDao().byId(it)?.name }
+                message.value = if (into != null) "导入成功！已归入「$into」，开始转写并生成导图"
+                else "导入成功！已开始转写并生成导图，点开笔记可看进度"
             } catch (e: Exception) {
                 message.value = "导入失败：${e.message}"
             }

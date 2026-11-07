@@ -25,6 +25,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -92,7 +94,11 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
+fun RecordScreen(
+    initialCategoryId: Long?,
+    onSaved: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
     val vm: RecordViewModel = viewModel(factory = recordVmFactory)
     val isRecording by vm.isRecording.collectAsState()
     val isPaused by vm.isPaused.collectAsState()
@@ -101,6 +107,13 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
     val finalText by vm.finalText.collectAsState()
     val mode by vm.transcribeMode.collectAsState()
     val error by vm.error.collectAsState()
+
+    // 归类：首页带来初始分类，页内可改（保存时随笔记落库）
+    var pickedCategoryId by remember { mutableStateOf(initialCategoryId) }
+    var showPicker by remember { mutableStateOf(false) }
+    val categories by App.get().database.categoryDao().observeAll()
+        .collectAsState(initial = emptyList())
+    val pickedName = categories.firstOrNull { it.id == pickedCategoryId }?.name
 
     // 保存完成 → 跳详情页（saved 是一次性事件流）
     LaunchedEffect(Unit) {
@@ -133,6 +146,33 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
             modifier = Modifier.padding(pad).fillMaxSize().padding(horizontal = Spacing.screen),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Spacer(Modifier.height(Spacing.lg))
+
+            // 归类 chip：录音前一眼看清这条会归到哪，点一下可换
+            Surface(
+                onClick = { showPicker = true },
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(CategoryUi.color(pickedCategoryId)),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (pickedName != null) "将归入：$pickedName" else "未分类 · 点击归类",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             Spacer(Modifier.height(Spacing.lg))
 
             // 状态行：一个点 + 一句话，替代原来干巴巴的「正在录音」；录音中的红点缓慢呼吸
@@ -239,7 +279,7 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                     Button(
                         onClick = {
                             view.hapticConfirm()
-                            vm.stopAndSave()
+                            vm.stopAndSave(pickedCategoryId)
                         },
                         shape = CircleShape,
                         modifier = Modifier.height(48.dp),
@@ -324,6 +364,14 @@ fun RecordScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showPicker) {
+        CategoryPickerSheet(
+            current = pickedCategoryId,
+            onDismiss = { showPicker = false },
+            onPick = { pickedCategoryId = it; showPicker = false },
+        )
     }
 }
 
@@ -485,6 +533,6 @@ class RecordViewModel : ViewModel() {
     fun start() = RecordSession.start()
     fun pause() = RecordSession.pause()
     fun resume() = RecordSession.resume()
-    fun stopAndSave() = RecordSession.stopAndSave()
+    fun stopAndSave(categoryId: Long?) = RecordSession.stopAndSave(categoryId)
     fun cancelIfAny() = RecordSession.cancelIfAny()
 }

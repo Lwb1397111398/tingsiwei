@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -38,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +48,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -61,12 +65,22 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
+fun TextInputScreen(
+    initialCategoryId: Long?,
+    onSaved: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
     var title by remember { mutableStateOf("") }
     var content by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // 归类：首页带来初始分类，页内可改
+    var pickedCategoryId by remember { mutableStateOf(initialCategoryId) }
+    var showPicker by remember { mutableStateOf(false) }
+    val categories by App.get().database.categoryDao().observeAll()
+        .collectAsState(initial = emptyList())
+    val pickedName = categories.firstOrNull { it.id == pickedCategoryId }?.name
 
     fun save(asMap: Boolean) {
         error = null
@@ -101,6 +115,7 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                         content = content,
                         mapJson = mapJson,
                         virtualRoot = virtualRoot,
+                        categoryId = pickedCategoryId,
                     )
                 } else {
                     NoteEntity(
@@ -110,6 +125,7 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                         status = NoteStatus.DRAFT,
                         source = NoteSource.TEXT,
                         content = content,
+                        categoryId = pickedCategoryId,
                     )
                 }
                 val id = App.get().database.noteDao().insert(entity)
@@ -145,6 +161,32 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
                 .imePadding()
                 .padding(horizontal = Spacing.screen),
         ) {
+            // 归类 chip：一眼看清这篇会归到哪，点一下可换
+            Surface(
+                onClick = { showPicker = true },
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.padding(bottom = Spacing.sm),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(CategoryUi.color(pickedCategoryId)),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (pickedName != null) "将归入：$pickedName" else "未分类 · 点击归类",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             // 标题：无边框，用大字号直接写，像在纸上起标题
             TitleField(
                 value = title,
@@ -262,6 +304,14 @@ fun TextInputScreen(onSaved: (Long) -> Unit, onBack: () -> Unit) {
             )
             Spacer(Modifier.height(Spacing.lg))
         }
+    }
+
+    if (showPicker) {
+        CategoryPickerSheet(
+            current = pickedCategoryId,
+            onDismiss = { showPicker = false },
+            onPick = { pickedCategoryId = it; showPicker = false },
+        )
     }
 }
 
