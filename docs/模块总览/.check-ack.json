@@ -19,9 +19,9 @@
     "acked_at": "2026-11-07 16:20:43"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "a28797c5f9fabf0cf10b46e72e1300db973b72ed",
-    "note": "本轮只改朗读卡音色框与快捷chips，未触及转写方式单选",
-    "acked_at": "2026-11-07 16:20:43"
+    "sha1": "f1e69fbe7f3964867861321d2fe2fd09f5ba0d43",
+    "note": "设置页遮挡批只改 AnimatedSection 显示容器（全页统一），未改变转写方式单选的功能行为",
+    "acked_at": "2026-11-07 20:43:16"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
     "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
