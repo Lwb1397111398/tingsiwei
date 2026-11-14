@@ -87,6 +87,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.imePadding
@@ -99,6 +100,8 @@ import com.tingsiwei.app.data.db.NoteEntity
 import com.tingsiwei.app.data.db.NoteSource
 import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.data.db.VersionEntity
+import com.tingsiwei.app.diagram.DiagramDoc
+import com.tingsiwei.app.diagram.DiagramParser
 import com.tingsiwei.app.export.Exporter
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
@@ -106,7 +109,9 @@ import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.transcribe.Timeline
 import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.TtsPlayer
+import com.tingsiwei.app.ui.components.DiagramView
 import com.tingsiwei.app.ui.components.EmptyState
+import com.tingsiwei.app.ui.components.InlineNotice
 import com.tingsiwei.app.ui.components.MapController
 import com.tingsiwei.app.ui.components.MindMapPanel
 import com.tingsiwei.app.ui.theme.Motion
@@ -659,6 +664,8 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
     if (n == null) return
     val speaking by vm.ttsSpeaking.collectAsState()
     val rate by vm.ttsRate.collectAsState()
+    // 分段图示随笔记解析一次；null = 未生成/已损坏 → 回退整段显示
+    val doc = remember(n.id, n.diagramJson) { DiagramParser.decode(n.diagramJson) }
     Column(modifier.fillMaxSize()) {
         val thinking = n.thinking
         // 占位提示只占剩余空间：朗读按钮必须始终留在屏幕里，思路还没生成时也知道去哪按
@@ -674,16 +681,7 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
                     else "生成完成后，点下面的按钮就能朗读。",
                 )
             } else {
-                SelectionContainer {
-                    Text(
-                        thinking,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = Spacing.screen, vertical = Spacing.md),
-                    )
-                }
+                ThinkingSections(n, vm, doc)
             }
         }
         // 朗读控制条：实心播放键 + 语速滑杆，整条贴在底部
@@ -724,6 +722,130 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
                     valueRange = 0.5f..2.0f,
                     modifier = Modifier.width(132.dp),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 思路的两种形态：
+ * 有分段图示（diagramJson 非空）→ 小节卡片流，讲关系的小节下面挂一张解释图；
+ * 没有 → 回退整段文本（老笔记、图示失败、开关关闭都走这里），并给一个手动生成的入口。
+ */
+@Composable
+private fun ThinkingSections(n: NoteEntity, vm: DetailViewModel, doc: DiagramDoc?) {
+    val busyStage by vm.busyStage.collectAsState(initial = null)
+    val sections = doc?.sections
+    if (sections.isNullOrEmpty()) {
+        // 回退形态：整段显示（与旧版完全一致）+ 手动生成图示入口。
+        // 结构必须用 Box(weight) 外包 + Text(fillMaxSize) 内填：weight 直接写在
+        // SelectionContainer/Text 上会被 wrapper 挡住（Column 只认直接 child 的
+        // ParentDataModifier），文本区占满全高把按钮挤扁——两种写法都实测踩过。
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                SelectionContainer {
+                    Text(
+                        n.thinking.orEmpty(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.screen, vertical = Spacing.md),
+                    )
+                }
+            }
+            if (busyStage == null) {
+                OutlinedButton(
+                    onClick = { vm.regenDiagrams() },
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(bottom = Spacing.sm),
+                ) {
+                    Icon(Icons.Filled.Image, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("生成分段图示")
+                }
+            }
+        }
+        return
+    }
+    // 图示任务进行中（READY 态下 stage 只来自图示化/版本恢复这类本地任务）：顶部一条轻提示
+    SelectionContainer {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            contentPadding = PaddingValues(
+                start = Spacing.screen,
+                end = Spacing.screen,
+                top = Spacing.md,
+                bottom = Spacing.xl,
+            ),
+        ) {
+            busyStage?.takeIf { it.isNotBlank() }?.let { stage ->
+                item(key = "diagramBusy") {
+                    InlineNotice(stage)
+                }
+            }
+            items(sections.size) { i ->
+                val s = sections[i]
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(Spacing.lg),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        if (s.title.isNotBlank()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    Modifier
+                                        .size(22.dp)
+                                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        "${i + 1}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                }
+                                Spacer(Modifier.width(Spacing.sm))
+                                Text(
+                                    s.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Text(
+                            s.text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
+                        )
+                        s.diagram?.let { d ->
+                            DiagramView(
+                                d,
+                                modifier = Modifier.padding(top = Spacing.xs),
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "regenDiagram") {
+                if (busyStage == null) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        OutlinedButton(
+                            onClick = { vm.regenDiagrams() },
+                            shape = CircleShape,
+                        ) {
+                            Text("重新生成图示")
+                        }
+                    }
+                }
             }
         }
     }
@@ -1006,6 +1128,28 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
 
     fun generate() {
         NoteProcessor.start(noteId, NoteProcessor.Kind.GENERATE)
+    }
+
+    /**
+     * 生成/重画分段图示（思路页按钮）。开关关闭或没思路时给一句人话提示；
+     * 同笔记已有任务在跑时宿主幂等拒绝，这里把拒绝转成可见提示。
+     */
+    fun regenDiagrams() {
+        viewModelScope.launch {
+            val s = settingsRepo.current()
+            if (!s.diagramsEnabled) {
+                uiMessage.value = "分段图示在设置里是关闭的，先到设置页「生成偏好」打开"
+                return@launch
+            }
+            val n = db.noteDao().byId(noteId) ?: return@launch
+            if (n.thinking.isNullOrBlank()) {
+                uiMessage.value = "还没有思路，先生成一次再配图"
+                return@launch
+            }
+            if (!NoteProcessor.start(noteId, NoteProcessor.Kind.DIAGRAM)) {
+                uiMessage.value = "这篇笔记还有任务在跑，等它完成再试"
+            }
+        }
     }
 
     fun sendSuggestion(text: String) {

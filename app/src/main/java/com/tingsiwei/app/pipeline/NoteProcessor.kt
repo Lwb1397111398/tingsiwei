@@ -2,6 +2,7 @@ package com.tingsiwei.app.pipeline
 
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteStatus
+import com.tingsiwei.app.llm.DiagramFlow
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.transcribe.Transcriber
 import kotlinx.coroutines.CancellationException
@@ -24,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object NoteProcessor {
 
-    enum class Kind { TRANSCRIBE, GENERATE, REVISE }
+    enum class Kind { TRANSCRIBE, GENERATE, REVISE, DIAGRAM }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = ConcurrentHashMap<Long, Job>()
@@ -54,6 +55,7 @@ object NoteProcessor {
                         Kind.TRANSCRIBE -> runTranscribe(noteId)
                         Kind.GENERATE -> runGenerate(noteId)
                         Kind.REVISE -> runRevise(noteId, arg.orEmpty())
+                        Kind.DIAGRAM -> runDiagram(noteId)
                     }
                 } finally {
                     jobs.remove(noteId)
@@ -154,10 +156,42 @@ object NoteProcessor {
 
     private suspend fun runGenerate(noteId: Long) {
         Generator(App.get().database, App.get().settings).generate(noteId) { msg -> setStage(noteId, msg) }
+        // 主成果（导图+思路）落库后自动接图示化；失败不影响 READY 状态（DiagramFlow 内部软失败）
+        runDiagramIfEnabled(noteId)
     }
 
     private suspend fun runRevise(noteId: Long, suggestion: String) {
         Generator(App.get().database, App.get().settings).revise(noteId, suggestion) { msg -> setStage(noteId, msg) }
+    }
+
+    /**
+     * 图示化（受设置开关控制，只对生成成功且已有思路的笔记跑）。
+     * 有意不在 maybeRun/resumeStuck 里自动补图示：那会让升级后打开每篇老笔记都烧一次 API，
+     * 老笔记想配图请到思路页点「生成图示」。
+     */
+    private suspend fun runDiagramIfEnabled(noteId: Long) {
+        val dao = App.get().database.noteDao()
+        val n = dao.byId(noteId) ?: return
+        if (n.status != NoteStatus.READY || n.thinking.isNullOrBlank()) return
+        val enabled = try {
+            App.get().settings.current().diagramsEnabled
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        if (!enabled) return
+        runDiagram(noteId)
+    }
+
+    private suspend fun runDiagram(noteId: Long) {
+        try {
+            DiagramFlow.generate(noteId, App.get().database, App.get().settings) { msg -> setStage(noteId, msg) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 图示失败是软失败：主成果（导图+思路）不受影响，静默结束
+        }
     }
 
     private fun setStage(noteId: Long, stage: String?) {

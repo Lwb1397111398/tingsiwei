@@ -62,6 +62,11 @@ data class NoteEntity(
     val mapJson: String? = null,
     /** 记忆用的思路段落 */
     val thinking: String? = null,
+    /**
+     * 思路分段图示 JSON（DiagramParser.encode 格式：{"sections":[{"title","text","diagram"},...]}）。
+     * 思路生成后由 DiagramFlow 追加产出（受设置开关控制）；null = 未生成/已关闭——思路页回退整段显示。
+     */
+    val diagramJson: String? = null,
     /** 多个顶层主题时是否包了虚拟根节点 */
     val virtualRoot: Boolean = false,
     /** 归属分类，null = 未分类；无外键约束，删分类由 CategoryDao 事务善后 */

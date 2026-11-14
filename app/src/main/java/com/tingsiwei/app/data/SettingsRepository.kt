@@ -78,6 +78,8 @@ data class AppSettings(
     val llmConservative: Boolean = false,
     /** 思路精修（三段式：起草→自查→按思路出图）。更慢但图文更一致；默认关=一次成稿，快约 3 倍 */
     val llmStagedThinking: Boolean = false,
+    /** 思路分段图示：生成完成后追加一次调用，把思路拆小节并给讲关系的小节配解释图；默认开 */
+    val diagramsEnabled: Boolean = true,
     /** 朗读引擎：系统 TTS / 本地离线模型 / 在线大模型 */
     val ttsEngine: String = TtsEngine.SYSTEM,
     /** 在线朗读四件套：接口地址、API Key、音色、模型（模型可手填或「检索模型」点选，不局限于某一家） */
@@ -120,6 +122,7 @@ class SettingsRepository(private val context: Context) {
         val llmMinIntervalMs = longPreferencesKey("llm_min_interval_ms")
         val llmConservative = booleanPreferencesKey("llm_conservative")
         val llmStagedThinking = booleanPreferencesKey("llm_staged_thinking")
+        val diagramsEnabled = booleanPreferencesKey("diagrams_enabled")
         val ttsEngine = stringPreferencesKey("tts_engine")
         val ttsCloudUrl = stringPreferencesKey("tts_cloud_url")
         val ttsCloudKey = stringPreferencesKey("tts_cloud_key")
@@ -159,6 +162,7 @@ class SettingsRepository(private val context: Context) {
         llmMinIntervalMs = this[K.llmMinIntervalMs] ?: LlmPolicy.DEFAULT_MIN_INTERVAL_MS,
         llmConservative = this[K.llmConservative] ?: false,
         llmStagedThinking = this[K.llmStagedThinking] ?: false,
+        diagramsEnabled = this[K.diagramsEnabled] ?: true,
         ttsEngine = this[K.ttsEngine] ?: TtsEngine.SYSTEM,
         ttsCloudUrl = this[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
         ttsCloudKey = this[K.ttsCloudKey].orEmpty(),
@@ -250,6 +254,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLlmStagedThinking(flag: Boolean) {
         context.dataStore.edit { it[K.llmStagedThinking] = flag }
+    }
+
+    suspend fun setDiagramsEnabled(flag: Boolean) {
+        context.dataStore.edit { it[K.diagramsEnabled] = flag }
     }
 
     suspend fun setTtsRate(rate: Float) {

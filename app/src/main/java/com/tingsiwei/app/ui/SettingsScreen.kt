@@ -125,6 +125,7 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
     val transcribeMode by vm.transcribeMode.collectAsState()
     val allowExpand by vm.allowExpand.collectAsState()
     val stagedThinking by vm.stagedThinking.collectAsState()
+    val diagramsEnabled by vm.diagramsEnabled.collectAsState()
     val ttsRate by vm.ttsRate.collectAsState()
     val ttsEngine by vm.ttsEngine.collectAsState()
     val ttsCloudUrl by vm.ttsCloudUrl.collectAsState()
@@ -358,6 +359,13 @@ fun SettingsScreen(onBack: () -> Unit, updateVm: UpdateViewModel) {
                     description = "先起草思路、再自查优化、最后按思路出图，图文更一致，但多等约 2 次请求",
                     checked = stagedThinking,
                     onCheckedChange = { vm.setStagedThinking(it) },
+                )
+                ThinDivider()
+                ToggleRow(
+                    title = "思路分段图示",
+                    description = "生成后把思路拆成小节，给讲流程、对比、时间线的小节配一张解释图；每篇会多一次请求",
+                    checked = diagramsEnabled,
+                    onCheckedChange = { vm.setDiagramsEnabled(it) },
                 )
             }
 
@@ -973,6 +981,7 @@ class SettingsViewModel : ViewModel() {
     val transcribeMode = MutableStateFlow(TranscribeMode.OFFLINE)
     val allowExpand = MutableStateFlow(true)
     val stagedThinking = MutableStateFlow(false)
+    val diagramsEnabled = MutableStateFlow(true)
     val ttsRate = MutableStateFlow(1.0f)
     val ttsEngine = MutableStateFlow(TtsEngine.SYSTEM)
     val ttsCloudUrl = MutableStateFlow(TtsCloudDefaults.BASE_URL)
@@ -1014,6 +1023,7 @@ class SettingsViewModel : ViewModel() {
             transcribeMode.value = s.transcribeMode
             allowExpand.value = s.allowExpand
             stagedThinking.value = s.llmStagedThinking
+            diagramsEnabled.value = s.diagramsEnabled
             ttsRate.value = s.ttsRate
             ttsEngine.value = s.ttsEngine
             ttsCloudUrl.value = s.ttsCloudUrl
@@ -1172,6 +1182,11 @@ class SettingsViewModel : ViewModel() {
     fun setStagedThinking(flag: Boolean) {
         stagedThinking.value = flag
         viewModelScope.launch { repo.setLlmStagedThinking(flag) }
+    }
+
+    fun setDiagramsEnabled(flag: Boolean) {
+        diagramsEnabled.value = flag
+        viewModelScope.launch { repo.setDiagramsEnabled(flag) }
     }
 
     fun setTtsRate(rate: Float) {

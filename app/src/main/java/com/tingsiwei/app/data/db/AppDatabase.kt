@@ -144,7 +144,7 @@ interface VersionDao {
 // 忘写迁移会在启动时直接抛异常（宁可崩在明处，不可静默清空用户全部笔记）。
 @Database(
     entities = [NoteEntity::class, VersionEntity::class, CategoryEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -175,11 +175,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3→v4（2026-11-14）：notes 加 diagramJson 列，思路分段图示 JSON；旧行为 null 即回退整段思路 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN diagramJson TEXT")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "tingsiwei.db")
                 // 2026-10-25 移除 fallbackToDestructiveMigration：升版本不再静默清库。
-                // 每次升 version 必须新增 Migration 并挂到这里（v1→v2、v2→v3 已挂）。
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                // 每次升 version 必须新增 Migration 并挂到这里（v1→v2、v2→v3、v3→v4 已挂）。
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }
