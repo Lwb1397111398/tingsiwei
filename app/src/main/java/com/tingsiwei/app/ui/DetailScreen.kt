@@ -107,6 +107,7 @@ import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
 import com.tingsiwei.app.pipeline.NoteProcessor
 import com.tingsiwei.app.transcribe.Timeline
+import com.tingsiwei.app.transcribe.TimelineLocator
 import com.tingsiwei.app.tts.CloudTtsConfig
 import com.tingsiwei.app.tts.TtsPlayer
 import com.tingsiwei.app.ui.components.DiagramView
@@ -139,6 +140,8 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
     val busyStage by vm.busyStage.collectAsState(initial = null)
 
     var tab by remember { mutableIntStateOf(0) }
+    // 思路页跳转的待对准句索引：跳转成功后原文页首次组合时滚到这句居中，对准后清空
+    var pendingCenterIdx by remember { mutableStateOf<Int?>(null) }
     var showVersions by remember { mutableStateOf(false) }
     val suggestion by vm.suggestion.collectAsState()
     val snackbar = remember { SnackbarHostState() }
@@ -284,12 +287,13 @@ fun DetailScreen(noteId: Long, onBack: () -> Unit) {
                 ) { t ->
                     when (t) {
                         1 -> TranscriptTab(
-                            n, vm,
+                            n, vm, pendingCenterIdx, { pendingCenterIdx = null },
                             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
                         )
                         2 -> ThinkingTab(
                             n, vm,
-                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                            onJump = { idx -> pendingCenterIdx = idx; tab = 1 },
+                            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
                         )
                         else -> Box(Modifier.fillMaxSize())
                     }
@@ -440,7 +444,13 @@ private fun CanvasToolButton(
 }
 
 @Composable
-private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Modifier) {
+private fun TranscriptTab(
+    n: NoteEntity?,
+    vm: DetailViewModel,
+    pendingCenterIdx: Int?,
+    onCentered: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (n == null) return
     // 时间轴随笔记解析一次（几百句 JSON 毫秒级），不随播放进度反复解析
     val segments = remember(n.id, n.timings) { Timeline.decode(n.timings) }
@@ -461,7 +471,7 @@ private fun TranscriptTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifie
             }
         } else if (segments.isNotEmpty()) {
             // 有时间轴：逐句渲染，播放时高亮当前句并自动滚动对准
-            SyncedTranscript(vm, segments, content)
+            SyncedTranscript(vm, segments, content, pendingCenterIdx, onCentered)
         } else {
             val ctx = LocalContext.current
             // 按段落拆成独立列表项：整篇塞进单个 item 时几万字要一次性测量排版，Lazy 形同虚设
@@ -517,6 +527,8 @@ private fun SyncedTranscript(
     vm: DetailViewModel,
     segments: List<Timeline.Segment>,
     content: String,
+    pendingCenterIdx: Int?,
+    onCentered: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val listState = rememberLazyListState()
@@ -542,6 +554,12 @@ private fun SyncedTranscript(
                 centerItem(listState, idx)
             }
         }
+    }
+    // 思路页跳转过来时：列表刚重新组合，自动跟随只认「句变化」可能不触发，主动对准一次
+    LaunchedEffect(pendingCenterIdx) {
+        val idx = pendingCenterIdx ?: return@LaunchedEffect
+        centerItem(listState, idx)
+        onCentered()
     }
     SelectionContainer {
         LazyColumn(
@@ -660,12 +678,31 @@ private fun AudioPlayerCard(vm: DetailViewModel) {
 }
 
 @Composable
-private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier = Modifier) {
+private fun ThinkingTab(
+    n: NoteEntity?,
+    vm: DetailViewModel,
+    onJump: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (n == null) return
     val speaking by vm.ttsSpeaking.collectAsState()
     val rate by vm.ttsRate.collectAsState()
     // 分段图示随笔记解析一次；null = 未生成/已损坏 → 回退整段显示
     val doc = remember(n.id, n.diagramJson) { DiagramParser.decode(n.diagramJson) }
+    // 跳原声的可行性：有录音 + 有句级时间轴。文字笔记/旧笔记自动没有此功能，界面不显示入口
+    val segments = remember(n.id, n.timings) { Timeline.decode(n.timings) }
+    val canJump = segments.isNotEmpty() && n.audioPath != null
+    // 点一节/一段 → 在时间轴里定位起点句；命中起播并跳原文页（onJump 切页+对准），
+    // 置信不足给提示不乱跳
+    val jump: (String) -> Unit = { query ->
+        val idx = TimelineLocator.locate(segments, query)
+        if (idx == null) {
+            vm.uiMessage.value = "没在录音里找到这段话对应的位置，可能改写幅度太大"
+        } else {
+            vm.onSentenceTap(segments[idx].startMs)
+            onJump(idx)
+        }
+    }
     Column(modifier.fillMaxSize()) {
         val thinking = n.thinking
         // 占位提示只占剩余空间：朗读按钮必须始终留在屏幕里，思路还没生成时也知道去哪按
@@ -681,7 +718,7 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
                     else "生成完成后，点下面的按钮就能朗读。",
                 )
             } else {
-                ThinkingSections(n, vm, doc)
+                ThinkingSections(n, vm, doc, canJump, jump)
             }
         }
         // 朗读控制条：实心播放键 + 语速滑杆，整条贴在底部
@@ -733,25 +770,52 @@ private fun ThinkingTab(n: NoteEntity?, vm: DetailViewModel, modifier: Modifier 
  * 没有 → 回退整段文本（老笔记、图示失败、开关关闭都走这里），并给一个手动生成的入口。
  */
 @Composable
-private fun ThinkingSections(n: NoteEntity, vm: DetailViewModel, doc: DiagramDoc?) {
+private fun ThinkingSections(
+    n: NoteEntity,
+    vm: DetailViewModel,
+    doc: DiagramDoc?,
+    canJump: Boolean,
+    onJump: (String) -> Unit,
+) {
     val busyStage by vm.busyStage.collectAsState(initial = null)
     val sections = doc?.sections
     if (sections.isNullOrEmpty()) {
-        // 回退形态：整段显示（与旧版完全一致）+ 手动生成图示入口。
-        // 结构必须用 Box(weight) 外包 + Text(fillMaxSize) 内填：weight 直接写在
-        // SelectionContainer/Text 上会被 wrapper 挡住（Column 只认直接 child 的
-        // ParentDataModifier），文本区占满全高把按钮挤扁——两种写法都实测踩过。
+        // 回退形态：按段显示 + 手动生成图示入口。有录音时间轴时段落可点（跳原声），
+        // 文字笔记/旧笔记则只读。结构必须用 Box(weight) 外包 + Text(fillMaxSize) 内填：
+        // weight 直接写在 SelectionContainer/Text 上会被 wrapper 挡住（Column 只认直接
+        // child 的 ParentDataModifier），文本区占满全高把按钮挤扁——两种写法都实测踩过。
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
+                val paragraphs = remember(n.id, n.thinking) {
+                    TimelineLocator.splitForDisplay(n.thinking.orEmpty())
+                }
                 SelectionContainer {
-                    Text(
-                        n.thinking.orEmpty(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier
+                    Column(
+                        Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = Spacing.screen, vertical = Spacing.md),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        if (canJump) {
+                            Text(
+                                "点任意一段，跳到录音里讲这段的位置听原声",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        paragraphs.forEach { p ->
+                            Text(
+                                p,
+                                style = MaterialTheme.typography.bodyLarge,
+                                lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = canJump) { onJump(p) }
+                                    .padding(vertical = 2.dp),
+                            )
+                        }
+                    }
                 }
             }
             if (busyStage == null) {
@@ -787,12 +851,23 @@ private fun ThinkingSections(n: NoteEntity, vm: DetailViewModel, doc: DiagramDoc
                     InlineNotice(stage)
                 }
             }
+            if (canJump) {
+                item(key = "jumpHint") {
+                    Text(
+                        "点任意一节，跳到录音里讲这段的位置听原声",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             items(sections.size) { i ->
                 val s = sections[i]
                 Surface(
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = canJump) { onJump(s.title + " " + s.text) },
                 ) {
                     Column(
                         Modifier.fillMaxWidth().padding(Spacing.lg),
@@ -819,6 +894,15 @@ private fun ThinkingSections(n: NoteEntity, vm: DetailViewModel, doc: DiagramDoc
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                 )
+                                if (canJump) {
+                                    Spacer(Modifier.weight(1f))
+                                    Icon(
+                                        Icons.Filled.PlayArrow,
+                                        "点这节卡片可跳到录音对应位置听原声",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                         Text(
