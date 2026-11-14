@@ -2,9 +2,9 @@
  "acks": {
   "应用自更新模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "f1e69fbe7f3964867861321d2fe2fd09f5ba0d43",
-    "note": "设置页遮挡修复只改 AnimatedSection 容器内部包裹（条件块竖排），应用更新卡的控件结构与职能面未动",
-    "acked_at": "2026-11-07 16:46:28"
+    "sha1": "c186fc05bf9df27bc1a7ed32d84f559e5106427e",
+    "note": "图示批对 SettingsScreen 只加「思路分段图示」开关行与 ViewModel 开关状态，不碰应用自更新模块（检查更新/版本显示/下载安装）的任何职能面",
+    "acked_at": "2026-11-14 15:39:28"
    },
    "app/src/main/java/com/tingsiwei/app/ui/AppNav.kt": {
     "sha1": "6d856e60d0093d3d9c923e3822715dd080966634",
@@ -14,19 +14,19 @@
   },
   "转写模式选择模块总览.md": {
    "app/src/main/java/com/tingsiwei/app/data/SettingsRepository.kt": {
-    "sha1": "83e941462ef9a43e36bab1246bde1f79b078d934",
-    "note": "本轮只改朗读卡音色框与快捷chips，未触及转写方式单选",
-    "acked_at": "2026-11-07 16:20:43"
+    "sha1": "0c978d67b83bfde3ad816d4ba179517ad717d832",
+    "note": "图示批三个文件改动均为图示功能（SettingsRepository 加 diagramsEnabled、NoteProcessor 加 Kind.DIAGRAM 分支、SettingsScreen 加开关行），未碰转写引擎选择与路由（TRANSCRIBE 分支、识别模式设置位）",
+    "acked_at": "2026-11-14 15:39:28"
    },
    "app/src/main/java/com/tingsiwei/app/ui/SettingsScreen.kt": {
-    "sha1": "f1e69fbe7f3964867861321d2fe2fd09f5ba0d43",
-    "note": "设置页遮挡批只改 AnimatedSection 显示容器（全页统一），未改变转写方式单选的功能行为",
-    "acked_at": "2026-11-07 20:43:16"
+    "sha1": "c186fc05bf9df27bc1a7ed32d84f559e5106427e",
+    "note": "图示批三个文件改动均为图示功能（SettingsRepository 加 diagramsEnabled、NoteProcessor 加 Kind.DIAGRAM 分支、SettingsScreen 加开关行），未碰转写引擎选择与路由（TRANSCRIBE 分支、识别模式设置位）",
+    "acked_at": "2026-11-14 15:39:28"
    },
    "app/src/main/java/com/tingsiwei/app/pipeline/NoteProcessor.kt": {
-    "sha1": "264be8d2ad1074dbd41c3328810ba33b842db9e8",
-    "note": "timings 落库与 segArrivals 是产物扩展，不改 OFFLINE/SYSTEM 模式选择与分流职能（默认值/设置页选中态/RecordSession 分流条件均未动）",
-    "acked_at": "2026-10-31 22:57:19"
+    "sha1": "c1572a2b06c82b851d1e5b9869bb7cb67db17a03",
+    "note": "图示批三个文件改动均为图示功能（SettingsRepository 加 diagramsEnabled、NoteProcessor 加 Kind.DIAGRAM 分支、SettingsScreen 加开关行），未碰转写引擎选择与路由（TRANSCRIBE 分支、识别模式设置位）",
+    "acked_at": "2026-11-14 15:39:28"
    },
    "app/src/main/java/com/tingsiwei/app/ui/RecordScreen.kt": {
     "sha1": "0c195a0d8e3d1047414c34ace5673cd9e9841c8f",
