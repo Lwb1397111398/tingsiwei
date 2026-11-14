@@ -84,6 +84,15 @@ object DiagramParser {
         return clean(doc)
     }
 
+    /** 从混着解释文字的原文里抽出第一个完整闭合的 JSON 对象（DetailParser 共用同一套容错传统） */
+    internal fun extractJsonObject(text: String): String? = extractObjectFrom(text)
+
+    /** 从被截断的 JSON 里抢救 [arrayKey] 数组中完整闭合的元素，拼回 {"key":[...]}；一个完整的都没有返回 null */
+    internal fun salvageArray(text: String, arrayKey: String): String? {
+        val elements = salvageElements(text, arrayKey) ?: return null
+        return "{\"$arrayKey\":[$elements]}"
+    }
+
     /** 落库编码：标准化后的 JSON，读回时走同一条 [parse] 容错路径 */
     fun encode(doc: DiagramDoc): String = json.encodeToString(doc)
 
@@ -116,7 +125,7 @@ object DiagramParser {
     }
 
     /** 从混着解释文字的原文里抽出第一个完整闭合的 JSON 对象（花括号配对，跳过字符串字面量） */
-    private fun extractJsonObject(text: String): String? {
+    private fun extractObjectFrom(text: String): String? {
         val start = text.indexOf('{')
         if (start < 0) return null
         var depth = 0
@@ -143,13 +152,16 @@ object DiagramParser {
      * 截断抢救：整体 JSON 没闭合时，从 "sections" 数组里逐个收集完整闭合的元素，
      * 丢掉被砍断的最后一截，把前面的段闭合回去。一个完整段都没有则放弃。
      */
-    private fun salvageTruncated(text: String): String? {
+    private fun salvageTruncated(text: String): String? = salvageArray(text, "sections")
+
+    /** 截断抢救的逐元素扫描（被 [DiagramParser.salvageArray] 与 DetailParser 共用） */
+    private fun salvageElements(text: String, arrayKey: String): String? {
         val start = text.indexOf('{')
         if (start < 0) return null
         val body = text.substring(start)
-        val secIdx = body.indexOf("\"sections\"")
-        if (secIdx < 0) return null
-        val arrStart = body.indexOf('[', secIdx)
+        val keyIdx = body.indexOf("\"$arrayKey\"")
+        if (keyIdx < 0) return null
+        val arrStart = body.indexOf('[', keyIdx)
         if (arrStart < 0) return null
         val elements = StringBuilder()
         var i = arrStart + 1
@@ -188,6 +200,6 @@ object DiagramParser {
             count++
         }
         if (count == 0) return null
-        return "{\"sections\":[$elements]}"
+        return elements.toString()
     }
 }

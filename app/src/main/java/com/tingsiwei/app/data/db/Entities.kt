@@ -67,6 +67,13 @@ data class NoteEntity(
      * 思路生成后由 DiagramFlow 追加产出（受设置开关控制）；null = 未生成/已关闭——思路页回退整段显示。
      */
     val diagramJson: String? = null,
+    /**
+     * 详细讲解 JSON（DetailParser.encode 格式：{"items":[{"title","detail","extra"},...]}）。
+     * 图示生成后由 DetailFlow 追加产出（受设置开关控制）：对照录音原文为每节补全被总结压缩掉的
+     * 细节，录音里有、总结整个漏掉的话题以 extra 条目追加；null = 未生成——卡片无展开内容，
+     * 听书与复制回退思路原文。
+     */
+    val detailJson: String? = null,
     /** 多个顶层主题时是否包了虚拟根节点 */
     val virtualRoot: Boolean = false,
     /** 归属分类，null = 未分类；无外键约束，删分类由 CategoryDao 事务善后 */

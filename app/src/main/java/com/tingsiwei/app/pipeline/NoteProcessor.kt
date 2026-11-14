@@ -2,6 +2,7 @@ package com.tingsiwei.app.pipeline
 
 import com.tingsiwei.app.App
 import com.tingsiwei.app.data.db.NoteStatus
+import com.tingsiwei.app.llm.DetailFlow
 import com.tingsiwei.app.llm.DiagramFlow
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.transcribe.Transcriber
@@ -25,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object NoteProcessor {
 
-    enum class Kind { TRANSCRIBE, GENERATE, REVISE, DIAGRAM }
+    enum class Kind { TRANSCRIBE, GENERATE, REVISE, DIAGRAM, DETAIL }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = ConcurrentHashMap<Long, Job>()
@@ -51,12 +52,14 @@ object NoteProcessor {
             if (jobs[noteId]?.isActive == true) return false
             val job = scope.launch {
                 try {
-                    when (kind) {
-                        Kind.TRANSCRIBE -> runTranscribe(noteId)
-                        Kind.GENERATE -> runGenerate(noteId)
-                        Kind.REVISE -> runRevise(noteId, arg.orEmpty())
-                        Kind.DIAGRAM -> runDiagram(noteId)
-                    }
+                when (kind) {
+                    Kind.TRANSCRIBE -> runTranscribe(noteId)
+                    Kind.GENERATE -> runGenerate(noteId)
+                    Kind.REVISE -> runRevise(noteId, arg.orEmpty())
+                    Kind.DIAGRAM -> runDiagram(noteId)
+                    // arg 非空 = 思路页手动按钮：原文装不下窗口时允许截断硬来（自动接力则跳过）
+                    Kind.DETAIL -> runDetail(noteId, manual = arg != null)
+                }
                 } finally {
                     jobs.remove(noteId)
                     setStage(noteId, null)
@@ -161,7 +164,12 @@ object NoteProcessor {
     }
 
     private suspend fun runRevise(noteId: Long, suggestion: String) {
+        val before = App.get().database.noteDao().byId(noteId)?.thinking
         Generator(App.get().database, App.get().settings).revise(noteId, suggestion) { msg -> setStage(noteId, msg) }
+        // 思路真被改动了才重生图示与详解：图示/详解都从思路派生，留着旧版会和新思路脱节
+        //（修「AI 修改后图示过期」的既有不一致）；改的只是导图结构时不动，省两次请求
+        val after = App.get().database.noteDao().byId(noteId)
+        if (after?.status == NoteStatus.READY && after.thinking != before) runDiagramIfEnabled(noteId)
     }
 
     /**
@@ -186,11 +194,45 @@ object NoteProcessor {
 
     private suspend fun runDiagram(noteId: Long) {
         try {
-            DiagramFlow.generate(noteId, App.get().database, App.get().settings) { msg -> setStage(noteId, msg) }
+            val ok = DiagramFlow.generate(noteId, App.get().database, App.get().settings) { msg -> setStage(noteId, msg) }
+            // 详解以图示的小节为骨架：图示成功后接力详解（失败是软失败，不拖累图示成果）
+            if (ok) runDetailIfEnabled(noteId)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             // 图示失败是软失败：主成果（导图+思路）不受影响，静默结束
+        }
+    }
+
+    /**
+     * 详细讲解（受设置开关控制，需要已有思路与图示小节）。
+     * 与图示同一纪律：有意不在 maybeRun/resumeStuck 里自动补——老笔记想补讲解请到思路页点按钮，
+     * 避免升级后打开每篇老笔记都烧一次 API。
+     */
+    private suspend fun runDetailIfEnabled(noteId: Long) {
+        val dao = App.get().database.noteDao()
+        val n = dao.byId(noteId) ?: return
+        if (n.status != NoteStatus.READY || n.thinking.isNullOrBlank()) return
+        val enabled = try {
+            App.get().settings.current().detailsEnabled
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        if (!enabled) return
+        runDetail(noteId, manual = false)
+    }
+
+    private suspend fun runDetail(noteId: Long, manual: Boolean) {
+        try {
+            DetailFlow.generate(noteId, App.get().database, App.get().settings, allowTruncate = manual) { msg ->
+                setStage(noteId, msg)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 详解失败是软失败：导图/思路/图示不受影响，静默结束（手动按钮的失败提示由 ViewModel 比对结果给出）
         }
     }
 

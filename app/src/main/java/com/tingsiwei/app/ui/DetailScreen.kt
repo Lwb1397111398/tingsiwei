@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -77,6 +79,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -102,6 +105,9 @@ import com.tingsiwei.app.data.db.NoteStatus
 import com.tingsiwei.app.data.db.VersionEntity
 import com.tingsiwei.app.diagram.DiagramDoc
 import com.tingsiwei.app.diagram.DiagramParser
+import com.tingsiwei.app.diagram.DetailDoc
+import com.tingsiwei.app.diagram.DetailParser
+import com.tingsiwei.app.diagram.composeFullText
 import com.tingsiwei.app.export.Exporter
 import com.tingsiwei.app.llm.Generator
 import com.tingsiwei.app.mindmap.TreeText
@@ -129,6 +135,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -689,6 +696,14 @@ private fun ThinkingTab(
     val rate by vm.ttsRate.collectAsState()
     // 分段图示随笔记解析一次；null = 未生成/已损坏 → 回退整段显示
     val doc = remember(n.id, n.diagramJson) { DiagramParser.decode(n.diagramJson) }
+    // 详细讲解随笔记解析一次；null = 未生成 → 卡片无展开内容，文字版/朗读回退思路原文
+    val detailDoc = remember(n.id, n.detailJson) { DetailParser.decode(n.detailJson) }
+    // 文字版全文：有详解 = 各节详解拼接（课堂细节完整，适合连读与听书）；没有详解回退思路原文
+    val textVersion = remember(n.id, n.thinking, n.detailJson) {
+        detailDoc?.let(::composeFullText) ?: n.thinking.orEmpty()
+    }
+    // 双版本切换：默认图示卡片（外观与从前一致），文字版适合连读、复制
+    var textMode by remember(n.id) { mutableStateOf(false) }
     // 跳原声的可行性：有录音 + 有句级时间轴。文字笔记/旧笔记自动没有此功能，界面不显示入口
     val segments = remember(n.id, n.timings) { Timeline.decode(n.timings) }
     val canJump = segments.isNotEmpty() && n.audioPath != null
@@ -710,7 +725,7 @@ private fun ThinkingTab(
             Modifier.weight(1f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
-            if (thinking.isNullOrBlank()) {
+            if (thinking.isNullOrBlank() && detailDoc == null) {
                 EmptyState(
                     icon = Icons.Filled.Lightbulb,
                     title = if (n.status == NoteStatus.GENERATING) "正在生成思路…" else "还没有思路",
@@ -718,7 +733,18 @@ private fun ThinkingTab(
                     else "生成完成后，点下面的按钮就能朗读。",
                 )
             } else {
-                ThinkingSections(n, vm, doc, canJump, jump)
+                Column(Modifier.fillMaxSize()) {
+                    if (doc != null) {
+                        ViewModeToggle(textMode) { textMode = it }
+                    }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        if (textMode && doc != null) {
+                            TextVersionView(textVersion)
+                        } else {
+                            ThinkingSections(n, vm, doc, detailDoc, canJump, jump)
+                        }
+                    }
+                }
             }
         }
         // 朗读控制条：实心播放键 + 语速滑杆，整条贴在底部
@@ -766,7 +792,7 @@ private fun ThinkingTab(
 
 /**
  * 思路的两种形态：
- * 有分段图示（diagramJson 非空）→ 小节卡片流，讲关系的小节下面挂一张解释图；
+ * 有分段图示（diagramJson 非空）→ 小节卡片流，讲关系的小节下面挂一张解释图，点卡片展开详细讲解；
  * 没有 → 回退整段文本（老笔记、图示失败、开关关闭都走这里），并给一个手动生成的入口。
  */
 @Composable
@@ -774,11 +800,27 @@ private fun ThinkingSections(
     n: NoteEntity,
     vm: DetailViewModel,
     doc: DiagramDoc?,
+    detailDoc: DetailDoc?,
     canJump: Boolean,
     onJump: (String) -> Unit,
 ) {
     val busyStage by vm.busyStage.collectAsState(initial = null)
     val sections = doc?.sections
+    // 详解与图示小节按标题对齐；标题对不上的条目 = 总结漏掉的整个话题（补充小节），排在最后
+    val detailByTitle = remember(n.id, n.detailJson) {
+        detailDoc?.items?.filter { !it.extra && it.title.isNotEmpty() }
+            ?.associateBy { it.title }
+            .orEmpty()
+    }
+    val extras = remember(n.id, n.detailJson) {
+        detailDoc?.items?.filter { it.extra && it.detail.isNotBlank() }.orEmpty()
+    }
+    // 展开状态按渲染序号记（小节 0..size-1，补充小节接着排）；详解重生成后整体收起
+    val expanded = remember(n.id, n.detailJson) { mutableStateListOf<Int>() }
+    fun toggle(i: Int) {
+        if (i in expanded) expanded.remove(i) else expanded.add(i)
+    }
+    val hasDetail = detailByTitle.isNotEmpty() || extras.isNotEmpty()
     if (sections.isNullOrEmpty()) {
         // 回退形态：按段显示 + 手动生成图示入口。有录音时间轴时段落可点（跳原声），
         // 文字笔记/旧笔记则只读。结构必须用 Box(weight) 外包 + Text(fillMaxSize) 内填：
@@ -834,7 +876,7 @@ private fun ThinkingSections(
         }
         return
     }
-    // 图示任务进行中（READY 态下 stage 只来自图示化/版本恢复这类本地任务）：顶部一条轻提示
+    // 图示/详解任务进行中（READY 态下 stage 只来自图示化/详解/版本恢复这类本地任务）：顶部一条轻提示
     SelectionContainer {
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -851,23 +893,29 @@ private fun ThinkingSections(
                     InlineNotice(stage)
                 }
             }
-            if (canJump) {
-                item(key = "jumpHint") {
-                    Text(
-                        "点任意一节，跳到录音里讲这段的位置听原声",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            item(key = "hint") {
+                val hint = when {
+                    !hasDetail && canJump -> "生成详细讲解后点卡片展开；点 ▶ 跳到录音对应位置听原声"
+                    !hasDetail -> "生成详细讲解后，点卡片可展开更多内容"
+                    canJump -> "点卡片展开详细讲解；点 ▶ 跳到录音对应位置听原声"
+                    else -> "点卡片展开详细讲解"
                 }
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             items(sections.size) { i ->
                 val s = sections[i]
+                val d = detailByTitle[s.title.trim()]
+                val isExpanded = i in expanded
                 Surface(
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = canJump) { onJump(s.title + " " + s.text) },
+                        .clickable(enabled = d != null) { toggle(i) },
                 ) {
                     Column(
                         Modifier.fillMaxWidth().padding(Spacing.lg),
@@ -893,15 +941,35 @@ private fun ThinkingSections(
                                     s.title,
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f),
                                 )
-                                if (canJump) {
-                                    Spacer(Modifier.weight(1f))
+                                if (d != null) {
+                                    val chevron by animateFloatAsState(
+                                        if (isExpanded) 180f else 0f,
+                                        label = "detailChevron",
+                                    )
                                     Icon(
-                                        Icons.Filled.PlayArrow,
-                                        "点这节卡片可跳到录音对应位置听原声",
-                                        modifier = Modifier.size(18.dp),
+                                        Icons.Filled.KeyboardArrowDown,
+                                        if (isExpanded) "收起详细讲解" else "展开详细讲解",
+                                        modifier = Modifier.size(20.dp).rotate(chevron),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
+                                }
+                                if (canJump) {
+                                    Box(
+                                        Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .clickable { onJump(s.title + " " + s.text) },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.PlayArrow,
+                                            "跳到录音里讲这段的位置听原声",
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -910,12 +978,108 @@ private fun ThinkingSections(
                             style = MaterialTheme.typography.bodyLarge,
                             lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
                         )
-                        s.diagram?.let { d ->
+                        s.diagram?.let { dg ->
                             DiagramView(
-                                d,
+                                dg,
                                 modifier = Modifier.padding(top = Spacing.xs),
                             )
                         }
+                        if (d != null) {
+                            AnimatedVisibility(
+                                visible = isExpanded,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut(),
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                    Text(
+                                        "详细讲解",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Text(
+                                        d.detail,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // 补充小节：录音里有、总结整个漏掉的话题。没有简短正文可收，收起时预览前三行
+            items(extras.size) { j ->
+                val e = extras[j]
+                val idx = sections.size + j
+                val isExpanded = idx in expanded
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { toggle(idx) },
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(Spacing.lg),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .size(22.dp)
+                                    .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "补",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                            Spacer(Modifier.width(Spacing.sm))
+                            Text(
+                                e.title.ifBlank { "补充内容" },
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            val chevron by animateFloatAsState(
+                                if (isExpanded) 180f else 0f,
+                                label = "extraChevron",
+                            )
+                            Icon(
+                                Icons.Filled.KeyboardArrowDown,
+                                if (isExpanded) "收起补充内容" else "展开补充内容",
+                                modifier = Modifier.size(20.dp).rotate(chevron),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (canJump) {
+                                Box(
+                                    Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .clickable { onJump(e.title + " " + e.detail.take(80)) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.PlayArrow,
+                                        "跳到录音里讲这段的位置听原声",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            e.detail,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
+                            maxLines = if (isExpanded) Int.MAX_VALUE else 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.animateContentSize(),
+                        )
                     }
                 }
             }
@@ -930,6 +1094,86 @@ private fun ThinkingSections(
                         }
                     }
                 }
+            }
+            item(key = "regenDetail") {
+                if (busyStage == null) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        OutlinedButton(
+                            onClick = { vm.regenDetail() },
+                            shape = CircleShape,
+                        ) {
+                            Text(if (detailDoc != null) "重新生成讲解" else "生成详细讲解")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 图示/文字双版本切换：样式对齐页面顶部的 PillTabs（小号），默认停在图示卡片 */
+@Composable
+private fun ViewModeToggle(textMode: Boolean, onTextMode: (Boolean) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.screen, vertical = Spacing.sm),
+    ) {
+        TogglePill("图示卡片", !textMode) { onTextMode(false) }
+        TogglePill("文字版", textMode) { onTextMode(true) }
+    }
+}
+
+@Composable
+private fun TogglePill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/**
+ * 文字版：详解拼接的全文（没详解时是思路原文），适合连读、听书与一键复制。
+ * 思路原文此前没有任何复制入口，这个视图顺带把缺口补上。
+ */
+@Composable
+private fun TextVersionView(text: String, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    SelectionContainer {
+        Column(
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.screen, vertical = Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyLarge,
+                lineHeight = MaterialTheme.typography.bodyLarge.lineHeight,
+            )
+            OutlinedButton(
+                onClick = {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("文字版", text))
+                },
+                shape = CircleShape,
+            ) {
+                Icon(Icons.Filled.ContentCopy, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("复制全文")
             }
         }
     }
@@ -1236,6 +1480,40 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
         }
     }
 
+    /**
+     * 生成/重写详细讲解（思路页按钮）。前置：有思路、有分段图示；开关关闭给提示。
+     * DetailFlow 是软失败（不写状态不抛错），这里等任务跑完比对 detailJson 有没有变化，
+     * 没变化给一句可见提示，不让按钮「点了没反应」。
+     */
+    fun regenDetail() {
+        viewModelScope.launch {
+            val s = settingsRepo.current()
+            if (!s.detailsEnabled) {
+                uiMessage.value = "详细讲解在设置里是关闭的，先到设置页「生成偏好」打开"
+                return@launch
+            }
+            val n = db.noteDao().byId(noteId) ?: return@launch
+            if (n.thinking.isNullOrBlank()) {
+                uiMessage.value = "还没有思路，先生成一次再写讲解"
+                return@launch
+            }
+            if (n.diagramJson.isNullOrBlank()) {
+                uiMessage.value = "还没有分段图示，先点「生成分段图示」"
+                return@launch
+            }
+            val before = n.detailJson
+            if (NoteProcessor.start(noteId, NoteProcessor.Kind.DETAIL, "manual")) {
+                while (NoteProcessor.isBusy(noteId)) delay(300)
+                val after = db.noteDao().byId(noteId)
+                if (after != null && after.detailJson == before) {
+                    uiMessage.value = "详细讲解没生成出来（接口没返回可用内容），稍后再试或换个模型"
+                }
+            } else {
+                uiMessage.value = "这篇笔记还有任务在跑，等它完成再试"
+            }
+        }
+    }
+
     fun sendSuggestion(text: String) {
         // 只有真正起跑才算"等待结果"；渠道忙导致没起跑时输入框原样保留
         if (NoteProcessor.start(noteId, NoteProcessor.Kind.REVISE, text)) reviseAwaitingResult = true
@@ -1381,8 +1659,9 @@ class DetailViewModel(private val noteId: Long) : ViewModel() {
     fun toggleTts() {
         viewModelScope.launch {
             val n = db.noteDao().byId(noteId) ?: return@launch
-            val thinking = n.thinking ?: return@launch
-            toggleTtsText(thinking)
+            // 听书读「文字版」：有详解读拼接全文（课堂细节完整，适合收听），没有详解回退思路原文
+            val text = DetailParser.decode(n.detailJson)?.let(::composeFullText) ?: n.thinking ?: return@launch
+            toggleTtsText(text)
         }
     }
 

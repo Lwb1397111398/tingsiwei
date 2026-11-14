@@ -80,6 +80,11 @@ data class AppSettings(
     val llmStagedThinking: Boolean = false,
     /** 思路分段图示：生成完成后追加一次调用，把思路拆小节并给讲关系的小节配解释图；默认开 */
     val diagramsEnabled: Boolean = true,
+    /**
+     * 思路详细讲解：图示分节后追加一次调用，对照录音转写原文为每节补全被总结压缩掉的细节
+     * （思路页点卡片展开），并拼出听书/复制共用的文字版；默认开。依赖「思路分段图示」的小节骨架。
+     */
+    val detailsEnabled: Boolean = true,
     /** 朗读引擎：系统 TTS / 本地离线模型 / 在线大模型 */
     val ttsEngine: String = TtsEngine.SYSTEM,
     /** 在线朗读四件套：接口地址、API Key、音色、模型（模型可手填或「检索模型」点选，不局限于某一家） */
@@ -123,6 +128,7 @@ class SettingsRepository(private val context: Context) {
         val llmConservative = booleanPreferencesKey("llm_conservative")
         val llmStagedThinking = booleanPreferencesKey("llm_staged_thinking")
         val diagramsEnabled = booleanPreferencesKey("diagrams_enabled")
+        val detailsEnabled = booleanPreferencesKey("details_enabled")
         val ttsEngine = stringPreferencesKey("tts_engine")
         val ttsCloudUrl = stringPreferencesKey("tts_cloud_url")
         val ttsCloudKey = stringPreferencesKey("tts_cloud_key")
@@ -163,6 +169,7 @@ class SettingsRepository(private val context: Context) {
         llmConservative = this[K.llmConservative] ?: false,
         llmStagedThinking = this[K.llmStagedThinking] ?: false,
         diagramsEnabled = this[K.diagramsEnabled] ?: true,
+        detailsEnabled = this[K.detailsEnabled] ?: true,
         ttsEngine = this[K.ttsEngine] ?: TtsEngine.SYSTEM,
         ttsCloudUrl = this[K.ttsCloudUrl] ?: TtsCloudDefaults.BASE_URL,
         ttsCloudKey = this[K.ttsCloudKey].orEmpty(),
@@ -258,6 +265,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setDiagramsEnabled(flag: Boolean) {
         context.dataStore.edit { it[K.diagramsEnabled] = flag }
+    }
+
+    suspend fun setDetailsEnabled(flag: Boolean) {
+        context.dataStore.edit { it[K.detailsEnabled] = flag }
     }
 
     suspend fun setTtsRate(rate: Float) {
